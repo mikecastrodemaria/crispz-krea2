@@ -219,8 +219,8 @@ def _quant_config():
         from diffusers import TorchAoConfig
         import torchao.quantization as q
     except Exception as e:
-        _log(f"[AVERT] torchao indisponible ({e}) -> chargement bf16. "
-             "Krea 2 en bf16 demande >32 Go de VRAM: attendez-vous a un spill tres lent.")
+        _log(f"[WARN] torchao unavailable ({e}) -> loading in bf16. "
+             "Krea 2 in bf16 needs >32 GB of VRAM: expect a very slow spill to system RAM.")
         return None
     cls = {
         "float8_weight_only": getattr(q, "Float8WeightOnlyConfig", None),
@@ -229,7 +229,7 @@ def _quant_config():
         "float8_dynamic": getattr(q, "Float8DynamicActivationFloat8WeightConfig", None),
     }.get(QUANT_MODE)
     if cls is None:
-        _log(f"[AVERT] schema '{QUANT_MODE}' absent de torchao -> bf16")
+        _log(f"[WARN] scheme '{QUANT_MODE}' not found in torchao -> bf16")
         return None
     return TorchAoConfig(cls())
 
@@ -660,9 +660,9 @@ def list_checkpoints():
             elif f.lower().endswith((".safetensors", ".ckpt", ".pt", ".sft", ".gguf")):
                 skipped += 1
     if skipped:
-        _log(f"{skipped} single-file checkpoint(s) ignore(s): Krea 2 n'a pas de "
-             "from_single_file dans diffusers (ni .safetensors Civitai, ni .gguf). "
-             "Utilisez un repo/dossier diffusers.")
+        _log(f"{skipped} single-file checkpoint(s) skipped: Krea 2 has no "
+             "from_single_file in diffusers (neither Civitai .safetensors nor .gguf). "
+             "Use a diffusers repo or folder.")
     return sorted(out)
 
 
@@ -923,19 +923,19 @@ def _load_transformer():
     repo = ZIMAGE_TRANSFORMER or BASE_REPO
     if ZIMAGE_TRANSFORMER and _is_single_file(ZIMAGE_TRANSFORMER):
         raise UnsupportedFeature(
-            f"Krea 2 ne peut pas charger un fichier unique ({os.path.basename(ZIMAGE_TRANSFORMER)}). "
-            "diffusers n'expose pas from_single_file pour cette architecture: les .safetensors "
-            "Civitai (fp8 comme bf16) et les .gguf sont inchargeables. Utilisez un repo "
-            "diffusers (krea/Krea-2-Turbo ou krea/Krea-2-Raw).")
+            f"Krea 2 cannot load a single file ({os.path.basename(ZIMAGE_TRANSFORMER)}). "
+            "diffusers does not expose from_single_file for this architecture: Civitai "
+            ".safetensors (fp8 and bf16 alike) and .gguf files are unloadable. Use a "
+            "diffusers repo instead (krea/Krea-2-Turbo or krea/Krea-2-Raw).")
     qc = _quant_config()
     kw = {"subfolder": "transformer", "torch_dtype": DTYPE}
     if qc is not None:
         kw["quantization_config"] = qc
         _log(f"loading Krea 2 transformer ({QUANT_MODE}): {repo} ... "
-             "(lit ~26 Go bf16 en RAM, ecrit ~13 Go quantifies en VRAM)")
+             "(reads ~26 GB bf16 into RAM, writes ~13 GB quantized to VRAM)")
     else:
-        _log(f"loading Krea 2 transformer (bf16, non quantifie): {repo} ... "
-             "[AVERT] ~26 Go: deborde une carte 32 Go, comptez ~59 s/step")
+        _log(f"loading Krea 2 transformer (bf16, not quantized): {repo} ... "
+             "[WARN] ~26 GB: overflows a 32 GB card, expect ~59 s/step")
     label = f"transformer {repo.split('/')[-1]}" + (f" ({QUANT_MODE})" if qc is not None else " (bf16)")
     return _load_monitor(
         label,
@@ -1114,8 +1114,9 @@ def _ensure_base():
     # forward. On force donc 'model' pour un base GGUF, quel que soit le reglage UI/config.
     _off = _effective_offload()
     if _off != OFFLOAD_MODE:
-        _log(f"GGUF base: offload '{OFFLOAD_MODE}' force a '{_off}' (un GGUF ne tourne pas "
-             f"sur GPU en none/sequential -> sinon CPU, ~500s/step)")
+        _log(f"quantized base: offload '{OFFLOAD_MODE}' forced to '{_off}' (a quantized "
+             f"transformer does not run on GPU in none/sequential -> would stay on CPU, "
+             f"~500s/step)")
     if DEVICE == "cuda" and _off == "model":
         pipe.enable_model_cpu_offload()
     elif DEVICE == "cuda" and _off == "sequential":
@@ -1144,14 +1145,14 @@ def _ensure_base():
 
 
 _UNSUPPORTED_MSG = {
-    "img2img": ("Refine / upscale-refine / harmonize indisponibles avec Krea 2: diffusers "
-                "n'expose pas de Krea2Img2ImgPipeline. L'upscale ESRGAN seul reste "
-                "disponible (il ne passe pas par le modele de diffusion)."),
-    "inpaint": ("Inpaint / Outpaint / Reframe(contain) indisponibles avec Krea 2: diffusers "
-                "n'expose pas de Krea2InpaintPipeline. Reframe en mode 'cover' (recadrage "
-                "pur, sans diffusion) reste disponible."),
-    "omni": ("Edition par instruction indisponible: Krea 2 n'a pas de modele d'edition "
-             "equivalent a Qwen-Image-Edit."),
+    "img2img": ("Refine / upscale-refine / harmonize are unavailable with Krea 2: "
+                "diffusers exposes no Krea2Img2ImgPipeline. ESRGAN-only upscaling still "
+                "works (it never goes through the diffusion model)."),
+    "inpaint": ("Inpaint / Outpaint / Reframe(contain) are unavailable with Krea 2: "
+                "diffusers exposes no Krea2InpaintPipeline. Reframe in 'cover' mode (a "
+                "plain crop, no diffusion) still works."),
+    "omni": ("Instruction editing is unavailable: Krea 2 has no editing model equivalent "
+             "to Qwen-Image-Edit."),
 }
 
 
@@ -1695,7 +1696,7 @@ def process_one(image, esrgan_model, factor, denoise, steps, prompt, seed, tile,
         if rt <= 0 and max(rw, rh) > _AUTO_TILE_ABOVE:
             rt = 1024
             _log(f"refine: image {rw}x{rh} > {_AUTO_TILE_ABOVE}px -> auto-tiling (tile 1024) "
-                 "pour eviter le pic VRAM (regle: auto_refine_tile_above)")
+                 "to avoid the VRAM peak (setting: auto_refine_tile_above)")
         if rt > 0:
             out = _refine_tiled(pipe, img, denoise, steps, prompt, seed,
                                 rt, int(refine_overlap) or 64)
