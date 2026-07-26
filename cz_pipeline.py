@@ -1,19 +1,31 @@
-"""crispz-qwen-edit - coeur Qwen-Image (diffusers, BF16): chargement des pipelines
-(txt2img / img2img / inpaint) + edition par instruction (onglet Omni/Edit), LoRA /
-checkpoints / transformer, generation et orchestration (generate / txt2img_run /
-process_one / outpaint / inpaint) + l'etat mutable runtime.
+"""crispz-krea2 - coeur Krea 2 (diffusers, BF16 + quantif fp8): chargement du pipeline
+txt2img, LoRA / modele de base, generation, + l'etat mutable runtime.
 
-Fork de crispz-studio (Z-Image). Mapping :
-  - base txt2img             -> QwenImagePipeline
-  - img2img (refine/upscale) -> QwenImageImg2ImgPipeline
-  - inpaint / reframe        -> QwenImageInpaintPipeline
-  - onglet Omni/Edit         -> QwenImageEditPlusPipeline (modele SEPARE, multi-images,
-                                defaut 'Qwen/Qwen-Image-Edit-2509') via generate_omni.
-Tous les pipelines Qwen utilisent un VRAI CFG (`true_cfg_scale`) + negative_prompt ; le
-curseur "guidance" de l'UI pilote donc true_cfg_scale (cf. _cfg / _qwen_call), et le
-`guidance_scale` distille reste a 1.0. L'API publique du module reste identique a
-l'upstream (memes noms, ex. ZIMAGE_TRANSFORMER, generate_omni, SAMPLER_CHOICES) pour ne
-casser ni cz_ui ni cz_cli.
+Fork de crispz-qwen-edit. Krea 2 partage le VAE (AutoencoderKLQwenImage) et la famille
+d'encodeur texte (Qwen3-VL) de Qwen-Image, d'ou le choix de cette base.
+
+  - base txt2img -> Krea2Pipeline (Krea2Transformer2DModel, 12.9B)
+
+CE QUE KREA 2 NE SAIT PAS FAIRE (diffusers n'expose AUCUN de ces pipelines) :
+  - img2img  -> pas de Krea2Img2ImgPipeline  => refine / upscale-refine indisponibles
+  - inpaint  -> pas de Krea2InpaintPipeline  => inpaint / outpaint / reframe indisponibles
+  - edition par instruction (onglet Omni)    => indisponible
+Ces capacites sont declarees dans CAPABILITIES ci-dessous ; cz_ui s'en sert pour MASQUER
+les onglets/controles correspondants, et get_pipe() leve UnsupportedFeature en filet de
+securite (CLI, API, appels directs).
+
+CHARGEMENT: uniquement from_pretrained sur un repo diffusers. Krea2Transformer2DModel
+n'herite PAS de FromOriginalModelMixin -> pas de from_single_file, donc les .safetensors
+Civitai (fp8 comme bf16) et les GGUF communautaires sont INCHARGEABLES. Voir README.
+Le bf16 seul deborde une carte 32 Go (35,6 Go au pic, ~59 s/step) -> on quantifie a la
+volee via torchao (fp8 weight-only): 22,8 Go, ~2,4 s/step, qualite equivalente.
+
+CFG: convention Krea 2 -> `guidance_scale` DIRECT (velocite = cond + g*(cond-uncond),
+guidance actif des que g > 0). Ce n'est PAS la convention Qwen (true_cfg_scale + un
+guidance_scale distille a 1.0). Turbo est distille -> g = 0.0 et 8 steps.
+
+L'API publique du module reste identique a l'upstream (memes noms, ex.
+ZIMAGE_TRANSFORMER, SAMPLER_CHOICES) pour ne casser ni cz_ui ni cz_cli.
 
 app lit l'etat courant via cz_pipeline.NAME (BASE_REPO, ZIMAGE_TRANSFORMER, ...) et pose
 cz_pipeline._PROGRESS / cz_pipeline._STOP depuis les handlers UI.
@@ -38,12 +50,39 @@ from cz_core import (
     _prefs, _is_single_file, _log, _dbg,
 )
 
-# Modele Qwen de base (txt2img/img2img/inpaint). Surcharge via env ZIMAGE_MODEL (compat)
-# ou QWEN_MODEL, ou prefs. Repo public.
-DEFAULT_BASE_REPO = (os.environ.get("QWEN_MODEL") or "Qwen/Qwen-Image")
-# Modele d'edition par instruction (onglet Omni/Edit), charge separement. 2509 = revision
-# recente, multi-images. Surcharge via env ZIMAGE_OMNI_MODEL / QWEN_EDIT_MODEL ou config.
-DEFAULT_OMNI_REPO = (os.environ.get("QWEN_EDIT_MODEL") or "Qwen/Qwen-Image-Edit-2509")
+# Modele Krea 2 de base (txt2img). Turbo par defaut: distille, 8 steps, guidance 0.
+# Raw = checkpoint mid-training non distille (28-52 steps + CFG) -> beaucoup plus lent,
+# surtout destine au fine-tuning / entrainement de LoRA. Repos GATED: il faut accepter la
+# licence sur huggingface.co AVEC LE COMPTE DU TOKEN (cf. README). Surcharge via env
+# ZIMAGE_MODEL (compat) ou KREA_MODEL, ou prefs.
+DEFAULT_BASE_REPO = (os.environ.get("KREA_MODEL") or "krea/Krea-2-Turbo")
+# Pas de modele d'edition par instruction chez Krea 2 (conserve pour compat d'API).
+DEFAULT_OMNI_REPO = None
+
+# ----------------------------------------------------------------------------
+# Capacites de CETTE famille de modele. cz_ui lit ce dict pour masquer les onglets
+# et controles sans pipeline derriere -> une seule source de verite, pas de liste
+# d'onglets caches codee en dur dans l'UI.
+# ----------------------------------------------------------------------------
+CAPABILITIES = {
+    "txt2img": True,
+    "img2img": False,   # pas de Krea2Img2ImgPipeline  -> refine, upscale-refine, harmonize
+    "inpaint": False,   # pas de Krea2InpaintPipeline  -> inpaint, outpaint, reframe(contain)
+    "omni": False,      # pas d'edition par instruction
+    "lora": True,       # Krea2Transformer2DModel herite de PeftAdapterMixin
+    "single_file": False,   # pas de FromOriginalModelMixin -> ni .safetensors Civitai ni GGUF
+    "esrgan": True,     # upscale pur ESRGAN: independant du modele de diffusion
+}
+
+
+class UnsupportedFeature(RuntimeError):
+    """Feature absente de cette famille de modele. Levee par get_pipe() en filet de
+    securite: l'UI masque deja les controles concernes via CAPABILITIES."""
+
+
+def supports(feature):
+    """True si la famille courante expose `feature` (cle de CAPABILITIES)."""
+    return bool(CAPABILITIES.get(feature, False))
 from cz_esrgan import load_esrgan, esrgan_upscale
 from cz_imageio import _now_stamp
 
@@ -110,10 +149,11 @@ for _spec in (CONFIG.get("default_loras") or []):
         _p = _nm if os.path.isabs(_nm) else os.path.join(LORAS_DIR, _nm)
         if os.path.isfile(_p):
             LORAS.append((_p, float(_w)))
-# Modele Omni/Edit (Qwen-Image-Edit, multi-images). Defaut = DEFAULT_OMNI_REPO pour que
-# l'onglet Edit marche sans config. Reglable via config.txt (zimage_omni_model) ou l'UI.
+# Modele Omni/Edit: aucun chez Krea 2 (pas d'equivalent Qwen-Image-Edit). Reste vide ->
+# l'onglet correspondant n'apparait pas (cf. omni_on dans cz_ui). Conserve comme variable
+# car cz_ui / cz_cli la lisent.
 OMNI_MODEL = (os.environ.get("ZIMAGE_OMNI_MODEL") or CONFIG.get("zimage_omni_model")
-              or DEFAULT_OMNI_REPO).strip()
+              or DEFAULT_OMNI_REPO or "").strip()
 
 # Caches process-wide. Un pipeline "base" (txt2img ZImagePipeline) detient les
 # composants; img2img / inpaint en derivent via from_pipe -> poids partages, pas de
@@ -128,18 +168,70 @@ _APPLIED_LORAS = []
 # Palier 2 (cohabitation VRAM): offload CPU de la passe diffusion. none = tout en VRAM.
 # model = decharge par sous-module (bon compromis). sequential = plus agressif, plus lent.
 # N'est PAS de la quantif: les poids restent BF16, ils transitent RAM <-> GPU.
-# Qwen-Image est gros (~20B) : on initialise depuis la config (default_cpu_offload, defaut
+# Krea 2 est gros (12.9B, 26 Go en bf16) : on initialise depuis la config (default_cpu_offload, defaut
 # 'model' pour ce fork) ou l'env CZ_OFFLOAD -> offload actif DES le 1er chargement (anti-OOM).
 OFFLOAD_CHOICES = ("none", "model", "sequential")
 OFFLOAD_MODE = (os.environ.get("CZ_OFFLOAD") or CONFIG.get("default_cpu_offload") or "none")
 if OFFLOAD_MODE not in OFFLOAD_CHOICES:
     OFFLOAD_MODE = "none"
 
-# Guidance Qwen-Image. Le curseur "guidance" de l'UI = `true_cfg_scale` (vrai CFG, qui
-# active le negative prompt). Plage conseillee ~3-5 (defaut 4.0). Le `guidance_scale`
-# distille du pipeline reste a 1.0 (cf. _cfg). Un 0 herite d'une config Z-Image retombe
-# sur 4.0. Override possible via env QWEN_CFG.
-GUIDANCE = float(os.environ.get("QWEN_CFG") or CONFIG.get("default_guidance") or 0) or 4.0
+# Guidance Krea 2. Convention DIFFERENTE de Qwen: le curseur de l'UI pilote directement
+# `guidance_scale`, la velocite valant cond + g*(cond-uncond); la guidance est active des
+# que g > 0 (equivaut au CFG usuel d'echelle 1+g). Turbo est DISTILLE -> 0.0 (pas de CFG,
+# un seul forward par step). Raw (non distille) veut ~4.5. 0.0 est donc une valeur VALIDE
+# ici, d'ou l'absence de repli "or 4.0". Override via env KREA_CFG.
+_g = os.environ.get("KREA_CFG")
+if _g is None:
+    _g = CONFIG.get("default_guidance")
+GUIDANCE = float(_g) if _g not in (None, "") else 0.0
+
+# Quantification du transformer au chargement (torchao). Krea 2 en bf16 pese 26 Go et
+# DEBORDE une carte 32 Go (pic 35,6 Go -> spill RAM via PCIe, ~59 s/step). En fp8
+# weight-only: 22,8 Go et ~2,4 s/step, pour une qualite visuellement equivalente (les
+# activations restent en bf16). Mesure sur RTX 5090 / 1024x1024 / 8 steps.
+#   "float8_weight_only" (defaut, natif sur sm_89+/Blackwell) | "int8_weight_only"
+#   | "int4_weight_only" | "float8_dynamic" | "none" (bf16 brut, exige >32 Go de VRAM)
+QUANT_MODE = (os.environ.get("KREA_QUANT") or CONFIG.get("quantization")
+              or "float8_weight_only").strip().lower()
+QUANT_CHOICES = ("float8_weight_only", "int8_weight_only", "int4_weight_only",
+                 "float8_dynamic", "none")
+if QUANT_MODE not in QUANT_CHOICES:
+    QUANT_MODE = "float8_weight_only"
+
+
+def set_quant_mode(mode):
+    """Change le schema de quantification. Invalide le pipe (rechargement au prochain run)."""
+    global QUANT_MODE
+    mode = (mode or "none").strip().lower()
+    if mode not in QUANT_CHOICES or mode == QUANT_MODE:
+        return
+    QUANT_MODE = mode
+    free_vram()
+    _log(f"quantization -> {QUANT_MODE} (reload on next run)")
+
+
+def _quant_config():
+    """TorchAoConfig pour QUANT_MODE, ou None si desactive/indisponible.
+    torchao >= 0.17 exige un objet AOBaseConfig (les chaines ne sont plus acceptees)."""
+    if QUANT_MODE == "none":
+        return None
+    try:
+        from diffusers import TorchAoConfig
+        import torchao.quantization as q
+    except Exception as e:
+        _log(f"[AVERT] torchao indisponible ({e}) -> chargement bf16. "
+             "Krea 2 en bf16 demande >32 Go de VRAM: attendez-vous a un spill tres lent.")
+        return None
+    cls = {
+        "float8_weight_only": getattr(q, "Float8WeightOnlyConfig", None),
+        "int8_weight_only": getattr(q, "Int8WeightOnlyConfig", None),
+        "int4_weight_only": getattr(q, "Int4WeightOnlyConfig", None),
+        "float8_dynamic": getattr(q, "Float8DynamicActivationFloat8WeightConfig", None),
+    }.get(QUANT_MODE)
+    if cls is None:
+        _log(f"[AVERT] schema '{QUANT_MODE}' absent de torchao -> bf16")
+        return None
+    return TorchAoConfig(cls())
 
 # Force ratio (facon Fooocus) pour upscale/img2img: si defini, l'image d'ENTREE est
 # recadree au centre a ce ratio avant traitement (crop to fit). Vide = ratio natif preserve
@@ -203,25 +295,33 @@ def set_guidance(g):
 
 
 def _cfg(negative=None):
-    """kwargs CFG communs a tous les pipelines Qwen : `true_cfg_scale` = curseur guidance
-    de l'UI (vrai CFG, active le negative prompt), `guidance_scale` distille fixe a 1.0."""
-    return {"true_cfg_scale": float(GUIDANCE), "guidance_scale": 1.0,
-            "negative_prompt": (negative or None)}
+    """kwargs CFG pour Krea 2. Convention du modele: `guidance_scale` DIRECT, la velocite
+    valant cond + g*(cond-uncond), guidance active des que g > 0. Pas de `true_cfg_scale`
+    (ca, c'etait Qwen). A g = 0 (Turbo distille) la guidance est desactivee et le negative
+    prompt est ignore par le pipeline -> on ne l'envoie pas, ca evite un forward inutile."""
+    g = float(GUIDANCE)
+    kw = {"guidance_scale": g}
+    if g > 0:
+        kw["negative_prompt"] = (negative or None)
+    return kw
 
 
 def _qwen_call(pipe, **kw):
-    """Appelle un pipeline Qwen en tolerant les variations d'API diffusers : si la version
-    installee ne connait pas `true_cfg_scale` / `negative_prompt`, on retire ces kwargs et
-    on relance plutot que de crasher la generation."""
+    """Appelle le pipeline en tolerant les variations d'API diffusers: si la version
+    installee ne connait pas un kwarg de guidance, on le retire et on relance plutot que
+    de crasher la generation. (Nom conserve pour ne pas casser l'API interne du fork.)"""
     try:
         return pipe(**kw)
     except TypeError as e:
-        if any(k in kw for k in ("true_cfg_scale", "negative_prompt")):
-            for k in ("true_cfg_scale", "negative_prompt"):
-                kw.pop(k, None)
-            _dbg(f"qwen call: retry sans kwargs CFG ({e})")
+        if "negative_prompt" in kw:
+            kw.pop("negative_prompt", None)
+            _dbg(f"krea2 call: retry sans negative_prompt ({e})")
             return pipe(**kw)
         raise
+
+
+# Alias explicite: le reste du fork appelle _qwen_call, mais le nom ment desormais.
+_krea_call = _qwen_call
 
 
 def _scheduler_accepts_sigmas(sched):
@@ -395,7 +495,7 @@ def request_stop():
 
 
 def set_zimage_model(repo_or_path):
-    """Change le modele Qwen. Un repo HF / dossier diffusers -> BASE_REPO.
+    """Change le modele Krea 2. Un repo HF / dossier diffusers -> BASE_REPO.
     Un fichier single-file (.safetensors Civitai, .gguf) -> transformer override."""
     global BASE_REPO, ZIMAGE_TRANSFORMER
     if not repo_or_path:
@@ -405,12 +505,12 @@ def set_zimage_model(repo_or_path):
         # uniquement le transformer (VAE + encodeur texte gardes en VRAM).
         if repo_or_path != ZIMAGE_TRANSFORMER:
             ZIMAGE_TRANSFORMER = repo_or_path
-            _log("Qwen transformer (single-file) changed -> transformer swap on next run")
+            _log("Krea 2 transformer (single-file) changed -> transformer swap on next run")
     elif repo_or_path != BASE_REPO:
         # Le repo de base change: VAE/encodeur/tokenizer changent aussi -> reload complet.
         BASE_REPO = repo_or_path
         free_vram()
-        _log("Qwen base repo changed -> will reload")
+        _log("Krea 2 base repo changed -> will reload")
 
 
 def set_zimage_transformer(path):
@@ -422,7 +522,7 @@ def set_zimage_transformer(path):
     path = path or None
     if path != ZIMAGE_TRANSFORMER:
         ZIMAGE_TRANSFORMER = path
-        _log(f"Qwen transformer -> {path or '(repo de base)'} "
+        _log(f"Krea 2 transformer -> {path or '(repo de base)'} "
              "-> transformer swap on next run (base components kept)")
 
 
@@ -537,36 +637,32 @@ def _checkpoint_dirs():
 
 
 def list_checkpoints():
-    """Modeles Z-Image single-file (.safetensors) des dossiers checkpoints (principal +
-    extra, fusionnes dans une seule liste). Exclut les checkpoints FP8 (non charges par
-    diffusers; prendre la version BF16/FP16). En cas de meme nom de fichier, le dossier
-    principal a la priorite."""
-    out = []
-    seen = set()
+    """Dossiers diffusers locaux utilisables comme modele de base Krea 2.
+
+    Contrairement aux autres forks crispz, AUCUN fichier single-file n'est propose:
+    Krea2Transformer2DModel n'a pas de from_single_file, donc un .safetensors (Civitai
+    fp8 ou bf16) et un .gguf sont inchargeables quoi qu'il arrive. Les lister ne ferait
+    que produire un echec au chargement apres selection.
+
+    Un dossier n'est retenu que s'il contient un model_index.json (layout diffusers).
+    Les repos HF officiels sont ajoutes par l'UI (ZIMAGE_BASE_REPOS), pas ici."""
+    out, seen = [], set()
+    skipped = 0
     for d in _checkpoint_dirs():
         if not os.path.isdir(d):
             continue
-        for f in os.listdir(d):
-            if f in seen:
-                continue
-            if not f.lower().endswith((".safetensors", ".ckpt", ".pt", ".sft", ".gguf")):
-                continue
-            if f.lower().endswith(".safetensors"):
-                reason = _safetensors_unsupported(os.path.join(d, f))
-                if reason:
-                    _log(f"checkpoint skipped ({reason} .safetensors, not loadable by "
-                         f"diffusers; use the BF16/FP16 build or a .gguf): {f}")
-                    continue
-            if f.lower().endswith(".gguf"):
-                a = _gguf_arch(os.path.join(d, f))
-                # a=None -> en-tete illisible: on laisse passer (ne pas ecarter a tort).
-                if a and a != GGUF_ARCH:
-                    _log(f"checkpoint skipped (GGUF architecture '{a}', this build only "
-                         f"loads '{GGUF_ARCH}'; that model needs its own pipeline and "
-                         f"text encoder/VAE): {f}")
-                    continue
-            seen.add(f)
-            out.append(f)
+        for f in sorted(os.listdir(d)):
+            p = os.path.join(d, f)
+            if os.path.isdir(p):
+                if f not in seen and os.path.isfile(os.path.join(p, "model_index.json")):
+                    seen.add(f)
+                    out.append(f)
+            elif f.lower().endswith((".safetensors", ".ckpt", ".pt", ".sft", ".gguf")):
+                skipped += 1
+    if skipped:
+        _log(f"{skipped} single-file checkpoint(s) ignore(s): Krea 2 n'a pas de "
+             "from_single_file dans diffusers (ni .safetensors Civitai, ni .gguf). "
+             "Utilisez un repo/dossier diffusers.")
     return sorted(out)
 
 
@@ -698,7 +794,7 @@ def check_omni_available():
     repo = (OMNI_MODEL or DEFAULT_OMNI_REPO).strip()
     try:
         req = urllib.request.Request("https://huggingface.co/api/models/" + repo,
-                                     headers={"User-Agent": "crispz-qwen-edit"})
+                                     headers={"User-Agent": "crispz-krea2"})
         with urllib.request.urlopen(req, timeout=8) as r:
             if r.status == 200:
                 return (f"**Edit model ready:** `{repo}`. The Edit tab edits an input image "
@@ -795,7 +891,7 @@ def _vram_str():
 
 
 # ----------------------------------------------------------------------------
-# Qwen-Image (diffusers, BF16) : un pipeline "base" txt2img qui detient les composants,
+# Krea 2 (diffusers, BF16 + quantif torchao) : un unique pipeline "base" txt2img.
 # img2img / inpaint derives via from_pipe (poids partages, pas de VRAM en double).
 # ----------------------------------------------------------------------------
 def _is_gguf_path(p):
@@ -814,50 +910,36 @@ def _effective_offload(tpath=None):
 
 
 def _load_transformer():
-    """Charge UNIQUEMENT le transformer courant (sans le reste du pipeline):
-      - GGUF quantifie -> from_single_file + GGUFQuantizationConfig (archi = repo de base)
-      - single-file .safetensors -> from_single_file
-      - repo HF / dossier diffusers -> sous-dossier 'transformer'
-      - pas d'override -> transformer du repo de base
+    """Charge UNIQUEMENT le transformer courant (sans le reste du pipeline), depuis un repo
+    diffusers, quantifie a la volee selon QUANT_MODE.
+
+    Pas de branche single-file/GGUF ici, contrairement aux autres forks crispz:
+    Krea2Transformer2DModel n'herite pas de FromOriginalModelMixin, donc from_single_file
+    n'existe pas. Un .safetensors Civitai ou un .gguf est refuse en amont par
+    list_checkpoints() / set_zimage_transformer().
+
     Utilise au chargement complet ET pour l'echange a chaud (_swap_transformer)."""
-    from diffusers import QwenImageTransformer2DModel
-    if ZIMAGE_TRANSFORMER:
-        if _is_single_file(ZIMAGE_TRANSFORMER):
-            if _is_gguf_path(ZIMAGE_TRANSFORMER):
-                # transformer Qwen GGUF (quantifie) -> tient en VRAM (~11 Go en Q4) et
-                # reste rapide. Le VAE + encodeur texte viennent du repo de base (cache).
-                from diffusers import GGUFQuantizationConfig
-                _log(f"loading Qwen transformer (GGUF, quantized): {ZIMAGE_TRANSFORMER} ...")
-                # config/subfolder = archi du transformer depuis le repo de base (cache),
-                # sinon from_single_file ne sait pas la structure et tente un repo par defaut.
-                return _load_monitor(
-                    f"transformer {os.path.basename(ZIMAGE_TRANSFORMER)} (GGUF)",
-                    lambda: QwenImageTransformer2DModel.from_single_file(
-                        ZIMAGE_TRANSFORMER,
-                        quantization_config=GGUFQuantizationConfig(compute_dtype=DTYPE),
-                        config=BASE_REPO, subfolder="transformer",
-                        torch_dtype=DTYPE))
-            # checkpoint Qwen single-file (.safetensors bf16/fp16) -> override transformer.
-            # config/subfolder = archi du transformer depuis le repo de base (deja en cache),
-            # comme pour le GGUF: sans ca, from_single_file ne sait pas la structure et va
-            # chercher un repo par defaut -> echec en mode offline (HF_HUB_OFFLINE=1).
-            _log(f"loading Qwen transformer (single-file): {ZIMAGE_TRANSFORMER} ...")
-            return _load_monitor(
-                f"transformer {os.path.basename(ZIMAGE_TRANSFORMER)}",
-                lambda: QwenImageTransformer2DModel.from_single_file(
-                    ZIMAGE_TRANSFORMER, config=BASE_REPO, subfolder="transformer",
-                    torch_dtype=DTYPE))
-        # repo HF / dossier diffusers -> charge le sous-dossier 'transformer'.
-        _log(f"loading Qwen transformer (repo subfolder): {ZIMAGE_TRANSFORMER} ...")
-        return _load_monitor(
-            f"transformer {ZIMAGE_TRANSFORMER}",
-            lambda: QwenImageTransformer2DModel.from_pretrained(
-                ZIMAGE_TRANSFORMER, subfolder="transformer", torch_dtype=DTYPE))
-    _log(f"loading Qwen transformer (base repo): {BASE_REPO} ...")
+    from diffusers import Krea2Transformer2DModel
+    repo = ZIMAGE_TRANSFORMER or BASE_REPO
+    if ZIMAGE_TRANSFORMER and _is_single_file(ZIMAGE_TRANSFORMER):
+        raise UnsupportedFeature(
+            f"Krea 2 ne peut pas charger un fichier unique ({os.path.basename(ZIMAGE_TRANSFORMER)}). "
+            "diffusers n'expose pas from_single_file pour cette architecture: les .safetensors "
+            "Civitai (fp8 comme bf16) et les .gguf sont inchargeables. Utilisez un repo "
+            "diffusers (krea/Krea-2-Turbo ou krea/Krea-2-Raw).")
+    qc = _quant_config()
+    kw = {"subfolder": "transformer", "torch_dtype": DTYPE}
+    if qc is not None:
+        kw["quantization_config"] = qc
+        _log(f"loading Krea 2 transformer ({QUANT_MODE}): {repo} ... "
+             "(lit ~26 Go bf16 en RAM, ecrit ~13 Go quantifies en VRAM)")
+    else:
+        _log(f"loading Krea 2 transformer (bf16, non quantifie): {repo} ... "
+             "[AVERT] ~26 Go: deborde une carte 32 Go, comptez ~59 s/step")
+    label = f"transformer {repo.split('/')[-1]}" + (f" ({QUANT_MODE})" if qc is not None else " (bf16)")
     return _load_monitor(
-        f"transformer {BASE_REPO}",
-        lambda: QwenImageTransformer2DModel.from_pretrained(
-            BASE_REPO, subfolder="transformer", torch_dtype=DTYPE))
+        label,
+        lambda: Krea2Transformer2DModel.from_pretrained(repo, **kw))
 
 
 def _lora_names(loras):
@@ -931,7 +1013,7 @@ def _swap_transformer(pipe):
         _log("transformer swap skipped (GGUF changes the effective offload) -> full reload")
         return False
     try:
-        _log(f"switching Qwen transformer -> {ZIMAGE_TRANSFORMER or BASE_REPO} "
+        _log(f"switching Krea 2 transformer -> {ZIMAGE_TRANSFORMER or BASE_REPO} "
              "(keeping VAE + text encoder in VRAM)")
         new_t = _load_transformer()
         old = getattr(pipe, "transformer", None)
@@ -1000,23 +1082,24 @@ def _ensure_base():
             return _BASE_PIPE
         _dbg("base pipeline: key changed -> free + reload")
         free_vram()
-    from diffusers import QwenImagePipeline
+    from diffusers import Krea2Pipeline
     t0 = time.time()
-    kwargs = {}
-    if ZIMAGE_TRANSFORMER:
-        kwargs["transformer"] = _load_transformer()
-    _log(f"loading Qwen-Image base: {BASE_REPO} (offload={OFFLOAD_MODE}, dtype=bf16) ... "
-         "first time downloads from HF (~20B, large), then cached")
-    pipe = _load_monitor(f"Qwen-Image base {BASE_REPO}",
-                         lambda: QwenImagePipeline.from_pretrained(BASE_REPO, torch_dtype=DTYPE,
-                                                                   **kwargs))
+    # Le transformer est TOUJOURS charge separement (contrairement aux autres forks): c'est
+    # la seule facon de lui appliquer la quantification torchao, indispensable pour tenir
+    # en 32 Go. Sans override explicite, on quantifie celui du repo de base.
+    kwargs = {"transformer": _load_transformer()}
+    _log(f"loading Krea 2 base: {BASE_REPO} (offload={OFFLOAD_MODE}, dtype=bf16, "
+         f"quant={QUANT_MODE}) ... first time downloads ~35.7 GB from HF (gated), then cached")
+    pipe = _load_monitor(f"Krea 2 base {BASE_REPO}",
+                         lambda: Krea2Pipeline.from_pretrained(BASE_REPO, torch_dtype=DTYPE,
+                                                               **kwargs))
     # Capture le config natif (flow-matching) du scheduler -> base pour construire les
     # autres samplers (euler/dpm2a/dpmpp2m) sans perdre shift/flow params.
     try:
         _BASE_SCHED_CONFIG = dict(pipe.scheduler.config)
     except Exception:
         _BASE_SCHED_CONFIG = None
-    # LoRA Qwen-Image (sur le transformer du base -> partage par les pipes derives).
+    # LoRA (sur le transformer du base -> partage par les pipes derives).
     # force=True: pipe neuf, aucun adaptateur pose -> on (re)pose tout.
     _APPLIED_LORAS = []
     if LORAS:
@@ -1056,22 +1139,37 @@ def _ensure_base():
     _BASE_PIPE = pipe
     _DERIVED = {"txt2img": pipe}
     _LOADED_KEY = key
-    _log(f"Qwen-Image base ready in {time.time() - t0:.1f}s (sampler={SAMPLER}/{SCHEDULE})")
+    _log(f"Krea 2 base ready in {time.time() - t0:.1f}s (sampler={SAMPLER}/{SCHEDULE})")
     return pipe
 
 
+_UNSUPPORTED_MSG = {
+    "img2img": ("Refine / upscale-refine / harmonize indisponibles avec Krea 2: diffusers "
+                "n'expose pas de Krea2Img2ImgPipeline. L'upscale ESRGAN seul reste "
+                "disponible (il ne passe pas par le modele de diffusion)."),
+    "inpaint": ("Inpaint / Outpaint / Reframe(contain) indisponibles avec Krea 2: diffusers "
+                "n'expose pas de Krea2InpaintPipeline. Reframe en mode 'cover' (recadrage "
+                "pur, sans diffusion) reste disponible."),
+    "omni": ("Edition par instruction indisponible: Krea 2 n'a pas de modele d'edition "
+             "equivalent a Qwen-Image-Edit."),
+}
+
+
 def get_pipe(kind="img2img"):
-    """Renvoie le pipeline demande. txt2img/img2img/inpaint derivent du base via
-    from_pipe (poids partages). Omni a besoin de composants en plus (SigLIP) ->
-    charge separement depuis un modele Omni dedie (CONFIG['zimage_omni_model'])."""
+    """Renvoie le pipeline demande. Krea 2 n'expose que le txt2img.
+
+    Filet de securite: l'UI masque deja les controles img2img/inpaint/omni via
+    CAPABILITIES, mais le CLI et les appels directs passent encore par ici -> on leve
+    UnsupportedFeature avec un message actionnable plutot que de laisser un ImportError
+    diffusers ou un silencieux repli sur le txt2img (qui produirait une image sans
+    rapport avec l'entree)."""
     base = _ensure_base()
     if kind in _DERIVED:
         _dbg(f"get_pipe('{kind}'): reuse derived")
         return _DERIVED[kind]
-    if kind == "omni":
-        return _load_omni()
-    from diffusers import QwenImageImg2ImgPipeline, QwenImageInpaintPipeline
-    cls = {"img2img": QwenImageImg2ImgPipeline, "inpaint": QwenImageInpaintPipeline}.get(kind)
+    if kind in _UNSUPPORTED_MSG and not supports(kind):
+        raise UnsupportedFeature(_UNSUPPORTED_MSG[kind])
+    cls = None
     if cls is None:
         return base
     _log(f"deriving {kind} pipeline (shared weights, no extra VRAM)")
@@ -1113,77 +1211,10 @@ def get_pipe(kind="img2img"):
 
 
 def _load_omni():
-    """Charge le pipeline d'edition Qwen-Image-Edit (onglet Omni/Edit). Modele SEPARE du
-    base (defaut 'Qwen/Qwen-Image-Edit-2509', multi-images). 2509 -> QwenImageEditPlus ;
-    revision de base -> QwenImageEdit. Pipeline separe (ne partage pas avec le base)."""
-    global _DERIVED
-    import diffusers
-    repo = (OMNI_MODEL or os.environ.get("ZIMAGE_OMNI_MODEL")
-            or CONFIG.get("zimage_omni_model") or DEFAULT_OMNI_REPO).strip()
-    if not repo:
-        raise RuntimeError("No Qwen-Image-Edit model set (config.txt 'zimage_omni_model').")
-    EditPlus = getattr(diffusers, "QwenImageEditPlusPipeline", None)
-    t0 = time.time()
-    if repo.lower().endswith(".gguf"):
-        # GGUF: transformer d'edition quantifie (local, ~13 Go) + le RESTE (encodeur texte
-        # ~17 Go, VAE, processor) tire du repo d'edition de base (zimage_omni_base, defaut
-        # Qwen-Image-Edit-2509). Fait tenir l'edition en VRAM 32 Go, sans le transformer 40 Go.
-        import importlib, json as _json
-        from huggingface_hub import hf_hub_download
-        from diffusers import QwenImageTransformer2DModel, GGUFQuantizationConfig
-        base_edit = (os.environ.get("QWEN_EDIT_BASE") or CONFIG.get("zimage_omni_base")
-                     or DEFAULT_OMNI_REPO).strip()
-        EditCls = EditPlus or diffusers.QwenImageEditPipeline
-        _log(f"loading Qwen-Image-Edit transformer (GGUF): {repo} + base {base_edit} "
-             f"via {EditCls.__name__} (offload={OFFLOAD_MODE}) ...")
-        # Transformer depuis le GGUF (archi tiree du repo de base, pas de download du
-        # transformer bf16). NB: from_pretrained(base, transformer=tf) telechargerait QUAND
-        # MEME le transformer 40 Go du repo -> on construit donc le pipeline composant par
-        # composant. Les classes viennent du model_index.json du repo de base.
-        tf = QwenImageTransformer2DModel.from_single_file(
-            repo, config=base_edit, subfolder="transformer",
-            quantization_config=GGUFQuantizationConfig(compute_dtype=DTYPE), torch_dtype=DTYPE)
-        mi = _json.load(open(hf_hub_download(base_edit, "model_index.json"), encoding="utf-8"))
-        comps = {"transformer": tf}
-        for name in ("scheduler", "vae", "text_encoder", "tokenizer", "processor"):
-            spec = mi.get(name)
-            if not (isinstance(spec, list) and len(spec) == 2):
-                continue
-            lib, cls_name = spec
-            Cls = getattr(importlib.import_module(lib), cls_name)
-            kw = {"torch_dtype": DTYPE} if name in ("vae", "text_encoder") else {}
-            # Charge UNIQUEMENT ce sous-dossier (encodeur ~17 Go, VAE...) ; le transformer
-            # 40 Go du repo n'est jamais telecharge.
-            comps[name] = Cls.from_pretrained(base_edit, subfolder=name, **kw)
-        pipe = EditCls(**comps)
-    else:
-        # repo diffusers complet (telechargement). 2509 -> QwenImageEditPlusPipeline
-        # (multi-images) ; revision de base -> QwenImageEditPipeline. Repli automatique.
-        plus = "2509" in repo or "plus" in repo.lower()
-        EditCls = (EditPlus if plus else None) or diffusers.QwenImageEditPipeline
-        _log(f"loading Qwen-Image-Edit: {repo} via {EditCls.__name__} (offload={OFFLOAD_MODE}) ...")
-        try:
-            pipe = EditCls.from_pretrained(repo, torch_dtype=DTYPE)
-        except Exception as e:
-            alt = diffusers.QwenImageEditPipeline
-            if EditCls is alt:
-                raise
-            _log(f"{EditCls.__name__} failed ({e}); falling back to {alt.__name__}")
-            pipe = alt.from_pretrained(repo, torch_dtype=DTYPE)
-    if DEVICE == "cuda" and OFFLOAD_MODE == "model":
-        pipe.enable_model_cpu_offload()
-    elif DEVICE == "cuda" and OFFLOAD_MODE == "sequential":
-        pipe.enable_sequential_cpu_offload()
-    else:
-        pipe = pipe.to(DEVICE)
-    try:
-        pipe.vae.enable_slicing()
-        pipe.vae.enable_tiling()
-    except Exception as e:
-        _dbg(f"VAE tiling not available on edit pipe: {e}")
-    _DERIVED["omni"] = pipe
-    _log(f"Qwen-Image-Edit ready in {time.time() - t0:.1f}s")
-    return pipe
+    """Krea 2 n'a pas de modele d'edition par instruction (pas d'equivalent
+    Qwen-Image-Edit chez Krea). Conserve pour compat d'API: l'onglet correspondant
+    est masque par l'UI via CAPABILITIES['omni'] = False."""
+    raise UnsupportedFeature(_UNSUPPORTED_MSG["omni"])
 
 
 def generate_omni(refs, prompt, negative, width, height, steps, seed):
@@ -1221,7 +1252,7 @@ def load_pipe():
 
 
 def generate(prompt, width, height, steps, seed, negative_prompt=""):
-    """txt2img Qwen-Image: genere une image depuis un prompt. CFG reel via true_cfg_scale
+    """txt2img Krea 2: genere une image depuis un prompt. guidance_scale direct
     (= curseur guidance, ~4.0), ~30-50 steps conseilles. Le negative prompt agit grace au
     vrai CFG (cf. _cfg)."""
     pipe = get_pipe("txt2img")
@@ -1669,9 +1700,9 @@ def process_one(image, esrgan_model, factor, denoise, steps, prompt, seed, tile,
             out = _refine_tiled(pipe, img, denoise, steps, prompt, seed,
                                 rt, int(refine_overlap) or 64)
         else:
-            _log(f"Qwen refine: whole image {rw}x{rh}, denoise {float(denoise):.2f}, "
+            _log(f"refine: whole image {rw}x{rh}, denoise {float(denoise):.2f}, "
                  f"{int(steps)} steps ...")
-            _progress(0.5, f"Qwen refine {rw}x{rh}...")
+            _progress(0.5, f"Refine {rw}x{rh}...")
             out = _refine_whole(pipe, img, denoise, steps, prompt, seed)
         timings["refine"] += time.time() - t0
         return out
@@ -1726,7 +1757,7 @@ def txt2img_run(prompt, width, height, gen_steps, seed, negative_prompt="",
 def _gen_meta(mode, prompt, negative="", seed=None, steps=None, guidance=None,
               size=None, model=None, styles=None, extra=None):
     """Construit le dict de metadonnees de generation (pour sidecar/PNG)."""
-    m = {"app": "crispz-qwen-edit", "mode": mode, "prompt": prompt or "",
+    m = {"app": "crispz-krea2", "mode": mode, "prompt": prompt or "",
          "negative": negative or "", "date": _now_stamp()}
     if seed is not None and int(seed) >= 0:
         m["seed"] = int(seed)

@@ -236,6 +236,26 @@ from cz_pipeline import (  # noqa: E402,F401
     txt2img_run, process_one, round_to_multiple, _reframe_canvas, _gen_meta,
 )
 
+# ----------------------------------------------------------------------------
+# Capacites de la famille de modele courante. Source unique de verite:
+# cz_pipeline.CAPABILITIES. L'UI MASQUE (visible=False) les onglets et controles dont le
+# pipeline n'existe pas, plutot que de les afficher et laisser l'utilisateur tomber sur
+# une erreur au clic.
+#
+# Krea 2: pas de Krea2Img2ImgPipeline ni de Krea2InpaintPipeline dans diffusers ->
+# refine, upscale-refine, harmonize, inpaint, outpaint et reframe(contain) sont hors
+# jeu. L'upscale ESRGAN reste dispo (il ne passe pas par le modele de diffusion).
+#
+# Les composants sont CONSERVES (juste caches) pour ne pas avoir a recabler les
+# handlers: leurs valeurs sont forcees a un no-op (ex. refine decoche) afin que les
+# chemins de code qui les lisent restent coherents.
+# ----------------------------------------------------------------------------
+_CAP = getattr(cz_pipeline, "CAPABILITIES", {})
+HAS_IMG2IMG = bool(_CAP.get("img2img", True))
+HAS_INPAINT = bool(_CAP.get("inpaint", True))
+HAS_OMNI = bool(_CAP.get("omni", True))
+HAS_SINGLE_FILE = bool(_CAP.get("single_file", True))
+
 # Etat mutable lu en live depuis cz_pipeline.* / cz_face.* (LORAS, FACESWAP_RESTORE,
 # CHECKPOINTS_DIR, GUIDANCE, _PROGRESS, _STOP, ...). app.py expose ces noms en proxy
 # (__getattr__) pour le smoke; ici on lit toujours cz_pipeline.NAME / cz_face.NAME.
@@ -340,7 +360,7 @@ def _format_timings(t, src_path=None, dst_path=None):
     parts = []
     if src_path:
         parts.append(f"Source: `{src_path}`")
-    parts.append(f"ESRGAN: **{t.get('esrgan', 0.0):.1f}s**  |  Qwen refine: **{t.get('refine', 0.0):.1f}s**  |  Total: **{total:.1f}s**")
+    parts.append(f"ESRGAN: **{t.get('esrgan', 0.0):.1f}s**  |  Diffusion refine: **{t.get('refine', 0.0):.1f}s**  |  Total: **{total:.1f}s**")
     if dst_path:
         parts.append(f"Saved: `{dst_path}`")
     return "  \n".join(parts)
@@ -499,16 +519,18 @@ def _refresh_models(new_dir):
     return gr.update(choices=models, value=value), f"{len(models)} model(s) found in {cz_esrgan.ESRGAN_DIR}"
 
 
-# Repos de base officiels Qwen, proposes directement dans le dropdown
-# "Qwen checkpoint" (selectionner = swap complet du BASE_REPO).
-ZIMAGE_BASE_REPOS = ["Qwen/Qwen-Image"]
-# Preset Performance par defaut pour chaque repo de base officiel: Turbo (distille,
-# guidance 0) vs Base (a besoin d'une vraie CFG + plus de steps). Le nom du repo de base
-# ("...Z-Image") ne contient pas "base", donc on mappe explicitement plutot que par
-# substring. steps/guidance sont ensuite tires du preset lui-meme (source unique).
-# Aucun preset force pour le repo de base Qwen: on laisse profile_for_model() decider
-# (profil "qwen" = 30 steps / guidance 4.0). NB: ne PAS remettre ici un nom de preset
-# inexistant dans performance_presets -- _apply_checkpoint l'ignorerait silencieusement.
+# Repos de base officiels Krea 2, proposes directement dans le dropdown "Krea 2 model"
+# (selectionner = swap complet du BASE_REPO). Les DEUX sont GATED sur Hugging Face: il
+# faut accepter la licence avec le compte auquel appartient le token (cf. README).
+#   Turbo = distille -> 8 steps, guidance 0. Le choix par defaut.
+#   Raw   = mid-training non distille -> 28 steps + CFG (~7x plus lent). Surtout utile
+#           pour entrainer des LoRA, pas pour generer au quotidien.
+# Aucun single-file ici: Krea 2 n'a pas de from_single_file (cf. CAPABILITIES).
+ZIMAGE_BASE_REPOS = ["krea/Krea-2-Turbo", "krea/Krea-2-Raw"]
+# Pas de preset Performance force: profile_for_model() lit les profils de cz_core
+# ("turbo" -> 8/0.0, "raw" -> 28/4.5), ce qui couvre deja les deux variantes. NB: ne PAS
+# mettre ici un nom de preset absent de performance_presets -- _apply_checkpoint
+# l'ignorerait silencieusement.
 ZIMAGE_BASE_PERFORMANCE = {}
 
 
@@ -565,12 +587,12 @@ def _apply_checkpoint(name):
         else:
             st, g = profile_for_model(name)
             perf_upd = _perf_update(st, g)
-        return (f"Qwen base: {name} -> {perf or 'auto'} (steps={st}, CFG={g}, reload on next run).",
+        return (f"Krea 2 model: {name} -> {perf or 'auto'} (steps={st}, CFG={g}, reload on next run).",
                 gr.update(value=st), gr.update(value=g), perf_upd)
     path = resolve_checkpoint(name)
     set_zimage_transformer(path)
     st, g = profile_for_model(os.path.basename(path))
-    return (f"Qwen transformer: {os.path.basename(path)} -> auto steps={st}, CFG={g} "
+    return (f"Krea 2 transformer: {os.path.basename(path)} -> auto steps={st}, CFG={g} "
             f"(transformer swap on next run — VAE + text encoder stay loaded).",
             gr.update(value=st), gr.update(value=g), _perf_update(st, g))
 
@@ -580,10 +602,10 @@ def _apply_transformer_repo(repo):
     Ajuste steps/guidance ET le preset Performance selon le profil du modele.
     Champ VIDE = no-op: on ne remet PAS a zero (sinon ce bouton effacerait le checkpoint
     choisi juste au-dessus). Pour revenir au base repo pur, choisir un repo officiel dans
-    'Qwen checkpoint'."""
+    'Krea 2 model'."""
     repo = (repo or "").strip()
     if not repo:
-        return ("Transformer override is empty — no change. Pick a model in 'Qwen "
+        return ("Transformer override is empty — no change. Pick a model in 'Krea 2 "
                 "checkpoint' above (that also clears any override).",
                 gr.update(), gr.update(), gr.update())
     set_zimage_transformer(repo)
@@ -2493,8 +2515,9 @@ def build_ui():
         if p:
             _sample_urls[n] = "/gradio_api/file=" + os.path.abspath(p).replace("\\", "/")
     js_full = CZ_JS.replace("__MAP__", json.dumps(_sample_urls))
-    # Omni (multi-reference) propose seulement si un modele Omni/Edit est configure.
-    omni_on = bool((cz_pipeline.OMNI_MODEL or "").strip())
+    # Omni (multi-reference) propose seulement si un modele Omni/Edit est configure ET si
+    # la famille de modele sait editer. Krea 2 -> HAS_OMNI False, l'onglet ne s'affiche pas.
+    omni_on = bool((cz_pipeline.OMNI_MODEL or "").strip()) and HAS_OMNI
 
     with gr.Blocks(title=f"crispz-studio {APP_VERSION}", theme=gr.themes.Default(), css=FOOOCUS_CSS,
                    js=js_full, head=_tagac_head()) as demo:
@@ -2566,8 +2589,12 @@ def build_ui():
 
                 with gr.Row():
                     # Chainage txt2img -> upscale (gauche) + Improve prompt (droite), alignes.
+                    # Le chainage txt2img -> upscale passe par process_one(), donc par
+                    # l'img2img. Sans pipeline img2img (Krea 2), la case est masquee et
+                    # forcee a False plutot que de mener a une erreur au clic.
                     auto_upscale_cb = gr.Checkbox(
-                        value=bool(CONFIG.get("default_auto_upscale", False)), scale=4,
+                        value=bool(CONFIG.get("default_auto_upscale", False)) and HAS_IMG2IMG,
+                        scale=4, visible=HAS_IMG2IMG,
                         label="Upscale after generate — chain each txt2img image through the "
                               "Upscale pipeline (ESRGAN + refine), no manual step")
                     improve_btn = gr.Button("Improve prompt", scale=1, min_width=150)
@@ -2623,27 +2650,45 @@ def build_ui():
                         value="Upscale / img2img", label="Input mode", visible=omni_on,
                         info="Reference (Omni) = compose from several reference images + prompt.")
                     with gr.Tabs():
-                        with gr.Tab("Upscale or img2img"):
+                        with gr.Tab("Upscale (ESRGAN)" if not HAS_IMG2IMG else "Upscale or img2img"):
+                            # Krea 2: pas d'img2img -> seul l'ESRGAN reste. Les controles de
+                            # refine sont conserves (les handlers les lisent) mais caches, et
+                            # forces a un no-op: refine decoche, denoise a 0.
+                            if not HAS_IMG2IMG:
+                                gr.Markdown(
+                                    "*Krea 2 ne fournit pas de pipeline img2img (pas de "
+                                    "`Krea2Img2ImgPipeline` dans diffusers) : le **refine par "
+                                    "diffusion est indisponible**. L'agrandissement ESRGAN "
+                                    "ci-dessous fonctionne normalement — il ne passe pas par le "
+                                    "modèle. Pour un refine, repassez l'image dans crispz-studio "
+                                    "(Z-Image) ou crispz-krea (FLUX).*")
                             with gr.Row():
                                 inp = _crop_input("Drop image here / click to upload", 300)
                                 with gr.Column():
                                     with gr.Row():
                                         do_esrgan_cb = gr.Checkbox(value=True, label="ESRGAN upscale",
-                                                                   info="Uncheck = img2img only (no enlargement).")
-                                        do_refine_cb = gr.Checkbox(value=bool(CONFIG.get("default_refine", True)),
+                                                                   info=("Enlarge with ESRGAN." if not HAS_IMG2IMG
+                                                                         else "Uncheck = img2img only (no enlargement)."),
+                                                                   interactive=HAS_IMG2IMG)
+                                        do_refine_cb = gr.Checkbox(value=bool(CONFIG.get("default_refine", True)) and HAS_IMG2IMG,
                                                                    label="Refine (img2img)",
-                                                                   info="Uncheck = ESRGAN upscale only (skip the slow diffusion pass).")
-                                    refine_first_cb = gr.Checkbox(value=bool(CONFIG.get("default_refine_first", False)),
+                                                                   info="Uncheck = ESRGAN upscale only (skip the slow diffusion pass).",
+                                                                   visible=HAS_IMG2IMG)
+                                    refine_first_cb = gr.Checkbox(value=bool(CONFIG.get("default_refine_first", False)) and HAS_IMG2IMG,
                                                                   label="Refine before upscale (faster)",
                                                                   info="Refine at native res THEN ESRGAN enlarge "
-                                                                       "(~4-16x faster refine; a touch less high-res detail).")
-                                    preset = gr.Dropdown(list(PRESETS), value="Custom", label="Use case preset")
+                                                                       "(~4-16x faster refine; a touch less high-res detail).",
+                                                                  visible=HAS_IMG2IMG)
+                                    preset = gr.Dropdown(list(PRESETS), value="Custom", label="Use case preset",
+                                                         visible=HAS_IMG2IMG)
                                     esrgan = gr.Dropdown(models, value=default_model, label="ESRGAN model")
                                     factor = gr.Slider(1.0, 4.0, value=DEFAULT_FACTOR, step=0.5, label="Upscale factor")
-                                    denoise = gr.Slider(0.0, 0.8, value=DEFAULT_DENOISE, step=0.01,
-                                                        label="Refine denoise (strength) - 0 = skip refine (ESRGAN only)")
+                                    denoise = gr.Slider(0.0, 0.8, value=DEFAULT_DENOISE if HAS_IMG2IMG else 0.0, step=0.01,
+                                                        label="Refine denoise (strength) - 0 = skip refine (ESRGAN only)",
+                                                        visible=HAS_IMG2IMG)
                                     refine_steps = gr.Slider(4, 30, value=DEFAULT_STEPS, step=1,
-                                                             label="Refine steps (runs at upscaled res -> higher = slower)")
+                                                             label="Refine steps (runs at upscaled res -> higher = slower)",
+                                                             visible=HAS_IMG2IMG)
                             with gr.Accordion("\U0001F4C4 Read prompt / metadata from an image (PNG Info)",
                                               open=False):
                                 gr.Markdown("*Drop a PNG/JPG to read its embedded prompt & parameters "
@@ -2661,7 +2706,7 @@ def build_ui():
                             with gr.Accordion("ESRGAN tiling (VRAM)", open=False):
                                 tile = gr.Slider(0, 1024, value=DEFAULT_TILE, step=8, label="Tile (0 = off)")
                                 overlap = gr.Slider(0, 128, value=DEFAULT_OVERLAP, step=8, label="Overlap")
-                            with gr.Accordion("Qwen tiling (4K+)", open=False):
+                            with gr.Accordion("Diffusion tiling (4K+)", open=False, visible=HAS_IMG2IMG):
                                 refine_tile = gr.Slider(0, 2048, value=DEFAULT_REFINE_TILE, step=16,
                                                         label="Diffusion tile (0 = whole image)")
                                 refine_overlap = gr.Slider(0, 256, value=DEFAULT_REFINE_OVERLAP, step=16,
@@ -2677,7 +2722,7 @@ def build_ui():
                         with gr.Tab("Vision Mix"):
                             gr.Markdown("*Vision Mix: a vision model looks at your reference images "
                                         "and an LLM blends them into ONE text prompt (e.g. a person + "
-                                        "an outfit + a setting), then Qwen-Image generates from it. "
+                                        "an outfit + a setting), then Krea 2 generates from it. "
                                         "Needs Ollama with a vision model (Advanced > Prompt AI). "
                                         "It mixes ideas/style, not exact pixels.*")
                             with gr.Row():
@@ -2701,7 +2746,11 @@ def build_ui():
                             rembg_status = gr.Markdown("*Local (rembg). Output = transparent PNG. "
                                                        "First use downloads the u2net model.*")
 
-                        with gr.Tab("Inpaint / Outpaint"):
+                        # Krea 2: aucun Krea2InpaintPipeline dans diffusers -> l'onglet entier
+                        # (Brush / Expand sides / Reframe-contain) n'a pas de moteur. Masque
+                        # plutot qu'affiche-puis-erreur. Les composants restent construits pour
+                        # ne pas casser le cablage des handlers plus bas.
+                        with gr.Tab("Inpaint / Outpaint", visible=HAS_INPAINT):
                             gr.Markdown("*One editor for everything: **Brush** = inpaint the painted "
                                         "area · **Expand sides** = outpaint Left/Right/Top/Bottom · "
                                         "**Reframe** = new aspect ratio. Steps follow the model "
@@ -2806,7 +2855,7 @@ def build_ui():
                                                value=CONFIG.get("default_performance", "Turbo (8 steps)"),
                                                label="Performance",
                                                info="Sets steps + guidance (Lightning also applies its LoRA). "
-                                                    "CFG presets = for the standard Qwen-Image base.")
+                                                    "CFG presets = for the Raw (non-distilled) variant.")
                         aspect = gr.Dropdown(list(ASPECT_RATIOS),
                                              value=CONFIG.get("default_aspect_ratio", "1024 x 1024  (1:1)"),
                                              label="Aspect ratio")
@@ -2826,7 +2875,7 @@ def build_ui():
                         with gr.Row():
                             guidance = gr.Slider(0.0, 8.0, value=float(CONFIG.get("default_guidance", 0.0)),
                                                  step=0.5, label="CFG guidance", scale=2,
-                                                 info="1 = Lightning/Rapid merges (CFG off). Qwen-Image base: ~4.")
+                                                 info="0 = Turbo (distilled, guidance off). Raw (non-distilled): ~4.5.")
                             sampler_dd = gr.Dropdown(
                                 list(SAMPLER_CHOICES),
                                 value=(CONFIG.get("default_sampler") or "euler").strip().lower()
@@ -2834,14 +2883,14 @@ def build_ui():
                                 else "euler",
                                 label="Sampler", scale=1,
                                 info="euler = native flow. unipc = UniPC. (DPM++/DPM2a impossible: "
-                                     "Qwen-Image forces custom sigmas.)")
+                                     "Krea 2 forces custom sigmas.)")
                             schedule_dd = gr.Dropdown(
                                 list(SCHEDULE_CHOICES),
                                 value=(CONFIG.get("default_schedule") or "sgm_uniform").strip().lower()
                                 if (CONFIG.get("default_schedule") or "sgm_uniform").strip().lower() in SCHEDULE_CHOICES
                                 else "sgm_uniform",
                                 label="Schedule", scale=1,
-                                info="sigma schedule (ComfyUI-style). sgm_uniform = native Qwen-Image. "
+                                info="sigma schedule (ComfyUI-style). sgm_uniform = native Krea 2. "
                                      "beta/karras/exponential remap the sigmas.")
                         image_number = gr.Slider(1, 30, value=int(CONFIG.get("default_image_number", 1)),
                                                  step=1, label="Image number (batch)")
@@ -2890,6 +2939,28 @@ def build_ui():
                         log_level_status = gr.Markdown("")
 
                     with gr.Tab("Models"):
+                        quant_dd = gr.Dropdown(choices=list(cz_pipeline.QUANT_CHOICES),
+                                               value=cz_pipeline.QUANT_MODE,
+                                               label="Quantization (torchao)",
+                                               info="Krea 2 is 12.9B: in raw BF16 it needs ~26 GB and "
+                                                    "overflows a 32 GB card. Keep float8_weight_only.")
+                        with gr.Accordion("ℹ️  Why quantization is not optional here", open=False):
+                            gr.Markdown(
+                                "Krea 2's transformer is **26 GB in BF16**. Measured on an RTX 5090 "
+                                "(32 GB), 1024×1024, 8 steps:\n\n"
+                                "| mode | VRAM peak | per step | one image |\n"
+                                "|---|---|---|---|\n"
+                                "| `none` (BF16) | **35.6 GB** — spills to system RAM | 59.2 s | 473 s |\n"
+                                "| `float8_weight_only` | **22.8 GB** — fits | 2.4 s | ~19 s |\n\n"
+                                "Only the *weights* are quantized; activations stay BF16, so quality is "
+                                "visually unchanged. `int8_weight_only` is the fallback if fp8 is "
+                                "unavailable (pre-Ada GPUs). `none` is for cards with more than 32 GB.\n\n"
+                                "*Changing this reloads the model on the next run.*")
+                        # Applique tout de suite (invalide le pipe) plutot que de threader
+                        # la valeur dans tous les handlers comme offload_mode: le schema de
+                        # quantification ne change qu'exceptionnellement.
+                        quant_dd.change(lambda m: cz_pipeline.set_quant_mode(m),
+                                        inputs=[quant_dd], outputs=None)
                         offload = gr.Dropdown(choices=list(cz_pipeline.OFFLOAD_CHOICES),
                                               value=cz_pipeline.OFFLOAD_MODE,
                                               label="CPU offload (VRAM)",
@@ -2911,8 +2982,8 @@ def build_ui():
                             ckpt_extra_dir_tb = gr.Textbox(
                                 value=cz_pipeline.CHECKPOINTS_EXTRA_DIR,
                                 label="Extra checkpoints folder (optional)",
-                                placeholder="e.g. D:\\models\\Qwen",
-                                info="Merged into the single 'Qwen checkpoint' list above. Leave empty to disable.")
+                                placeholder="e.g. D:\\models\\Krea2",
+                                info="Merged into the single 'Krea 2 model' list above. Diffusers folders only (model_index.json) -- Krea 2 cannot load single-file checkpoints.")
                             esrgan_dir_tb = gr.Textbox(value=cz_esrgan.ESRGAN_DIR,
                                                        label="ESRGAN_DIR (.pth/.safetensors folder)")
                             with gr.Row():
@@ -2923,7 +2994,7 @@ def build_ui():
                                 _ckpt_choices = ZIMAGE_BASE_REPOS + list_checkpoints()
                                 _ckpt_value = cz_pipeline.BASE_REPO if cz_pipeline.BASE_REPO in _ckpt_choices else ZIMAGE_BASE_REPOS[0]
                                 ckpt_dd = gr.Dropdown(choices=_ckpt_choices,
-                                                      value=_ckpt_value, label="Qwen checkpoint", scale=3)
+                                                      value=_ckpt_value, label="Krea 2 model", scale=3)
                                 ckpt_open_btn = gr.Button("\U0001F5BC️", size="sm", scale=0, min_width=44,
                                                           elem_id="cz_ckpt_open")
                                 ckpt_refresh_btn = gr.Button("Refresh", size="sm", scale=1)
@@ -2932,7 +3003,7 @@ def build_ui():
                                 transformer_tb = gr.Textbox(
                                     value="", scale=3,
                                     label="Transformer override (HF repo / diffusers folder)",
-                                    placeholder="HF repo with a Qwen-Image transformer",
+                                    placeholder="HF repo with a Krea 2 transformer",
                                     info="For community models with an incomplete tokenizer: "
                                          "loads only the transformer, keeps base VAE/encoder.")
                                 transformer_apply_btn = gr.Button("Apply override", size="sm", scale=1,

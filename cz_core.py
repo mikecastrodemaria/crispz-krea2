@@ -54,7 +54,7 @@ DEFAULT_OUTPUT_DIR = "out"
 DEFAULT_OUTPUT_FORMAT = "png"        # png | webp | jpg
 SUPPORTED_FORMATS = ("png", "webp", "jpg")
 IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic")
-DEFAULT_BASE_REPO = "Qwen/Qwen-Image"
+DEFAULT_BASE_REPO = "krea/Krea-2-Turbo"
 DEFAULT_ESRGAN_DIR = os.path.join(HERE, "upscale_models")
 
 
@@ -88,11 +88,18 @@ DEFAULT_OUTPUT_DIR = CONFIG.get("default_output_dir", DEFAULT_OUTPUT_DIR)
 DEFAULT_OUTPUT_FORMAT = CONFIG.get("default_output_format", DEFAULT_OUTPUT_FORMAT)
 
 # Profils par modele: substring du nom -> reglages recommandes (steps/guidance).
+# Krea 2 se decline en deux variantes aux reglages OPPOSES:
+#   Turbo = distille -> 8 steps, guidance 0.0 (guidance desactivee, 1 forward par step)
+#   Raw   = mid-training non distille -> 28 steps, guidance 4.5 (CFG actif = 2 forwards,
+#           donc ~7x le cout du Turbo). Surtout destine au fine-tuning / LoRA.
+# 'turbo' est teste AVANT 'krea' (dict ordonne) pour que "Krea-2-Turbo" ne matche pas
+# le profil Raw par accident.
 MODEL_PROFILES = CONFIG.get("model_profiles") or {
-    "qwen": {"steps": 30, "guidance": 4.0},
-    "edit": {"steps": 30, "guidance": 4.0},
+    "turbo": {"steps": 8, "guidance": 0.0},
+    "raw": {"steps": 28, "guidance": 4.5},
+    "krea": {"steps": 8, "guidance": 0.0},
 }
-DEFAULT_MODEL_PROFILE = CONFIG.get("default_model_profile") or {"steps": 30, "guidance": 4.0}
+DEFAULT_MODEL_PROFILE = CONFIG.get("default_model_profile") or {"steps": 8, "guidance": 0.0}
 
 
 def profile_for_model(name):

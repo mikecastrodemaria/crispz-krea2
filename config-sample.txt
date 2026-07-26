@@ -1,7 +1,6 @@
 {
-    "_hf_token_help": "Hugging Face token for GATED models (e.g. FLUX.1-Krea-dev). Create a READ token at https://huggingface.co/settings/tokens and accept the model license first. Leave empty if you ran 'huggingface-cli login'. config.txt is gitignored -> never commit your token.",
+    "_hf_token_help": "Hugging Face token for GATED models (krea/Krea-2-Turbo, krea/Krea-2-Raw). Create a READ token at https://huggingface.co/settings/tokens. IMPORTANT: accept the model license FIRST, logged in as the SAME account the token belongs to -- acceptance is tied to the account, not the browser, so a token from another account still gets GatedRepoError. Leave empty if you ran 'huggingface-cli login'. config.txt is gitignored -> never commit your token. See README, section 'Krea 2 -- gated access & licensing'.",
     "hf_token": "",
-
     "ollama_url": "http://localhost:11434",
     "ollama_describe_prompt": "You are an expert text-to-image prompt writer. Look at the image and output ONE detailed prompt as comma-separated visual tags (subject, clothing, setting, lighting, style, quality). No preamble, no explanation, just the prompt.",
     "ollama_improve_prompt": "Rewrite the following text-to-image prompt to be more vivid and detailed while keeping the same subject and intent. Output ONLY the improved prompt (comma-separated), no preamble.\n\nPROMPT: {prompt}",
@@ -9,62 +8,74 @@
     "ollama_vision_blocklist": [],
     "ollama_keep_alive": 0,
     "ollama_cpu": false,
-    "job_queue": {"enabled": true},
+    "job_queue": {
+        "enabled": true
+    },
     "_job_queue_help": "Job queue panel ('+ Queue' snapshots all settings incl. model; 'Run queue' chains them; Stop pauses). enabled=false removes the UI entirely (zero cost).",
-    "tag_autocomplete": {"enabled": true, "max_results": 8, "sources": ["https://raw.githubusercontent.com/DominikDoom/a1111-sd-webui-tagcomplete/main/tags/danbooru.csv"]},
+    "tag_autocomplete": {
+        "enabled": true,
+        "max_results": 8,
+        "sources": [
+            "https://raw.githubusercontent.com/DominikDoom/a1111-sd-webui-tagcomplete/main/tags/danbooru.csv"
+        ]
+    },
     "_tag_autocomplete_help": "Prompt/negative autocomplete. CSVs in sources are downloaded once to tags/ (any .csv dropped there is also used, rich 'name,cat,count,aliases' or one word per line) + local __wildcards__. enabled=false: no download, no JS injected (zero cost).",
-    "xyz_grid": {"enabled": true, "max_jobs": 100, "thumb": 512, "suggest": true},
+    "xyz_grid": {
+        "enabled": true,
+        "max_jobs": 100,
+        "thumb": 512,
+        "suggest": true
+    },
     "_xyz_grid_help": "X/Y/Z comparison grid (needs job_queue). Each combo becomes a queued job; an annotated contact sheet is assembled per Z value. max_jobs caps the combo count; thumb = cell size in px; suggest = contextual value suggestions (placeholder + fill button) per axis.",
-    "load_progress": {"enabled": true, "target_vram_gb": 14.0, "heartbeat_s": 2.0},
+    "load_progress": {
+        "enabled": true,
+        "target_vram_gb": 14.0,
+        "heartbeat_s": 2.0
+    },
     "_load_progress_help": "Live feedback while a model loads (first run downloads from HF = minutes of silence otherwise). Terminal shows a rewritten '[crispz][load] ... 45s | 3.2 GB in VRAM' line every heartbeat_s; the UI progress bar advances (VRAM allocated / target_vram_gb). enabled=false loads directly with no monitor thread (zero cost).",
     "caption_model": "blip-large",
     "_caption_model_help": "Local auto-describe model (no Ollama): blip-large (default) | blip-base",
     "improve_local_keywords": "highly detailed, sharp focus, professional photography, intricate details, natural lighting, high quality, 8k",
     "_improve_local_keywords_help": "Quality tags appended by 'Improve prompt' when no Ollama model is selected (local rule-based fallback, no model).",
-
     "_performance_presets_help": "name -> [steps, guidance] or [steps, guidance, lora_file]. A 3rd value applies that LoRA (slot 1) when the preset is selected. A distilled Lightning LoRA enables 8 steps + guidance 1 (no CFG) = fast & good. Put the LoRA in loras_dir and set its filename here.",
     "performance_presets": {
-            "Lightning (8 steps)": [
-                    8,
-                    1.0,
-                    "PUT_YOUR_LIGHTNING_LORA.safetensors"
-            ],
-            "Balanced (24 steps)": [
-                    24,
-                    4.0
-            ],
-            "Quality (40 steps)": [
-                    40,
-                    4.0
-            ]
+        "Lightning (8 steps)": [
+            8,
+            1.0,
+            "PUT_YOUR_LIGHTNING_LORA.safetensors"
+        ],
+        "Balanced (24 steps)": [
+            24,
+            4.0
+        ],
+        "Quality (40 steps)": [
+            40,
+            4.0
+        ]
     },
-    "_model_profiles_help": "Auto steps/guidance when a checkpoint is selected, matched by substring on the file name (first match wins, in order). Keep specific keys (rapid, lightning) BEFORE generic ones (qwen): Lightning/Rapid merges are distilled -> few steps, guidance 1.0 (CFG off).",
+    "_model_profiles_help": "Auto steps/guidance when a model is selected, matched by substring on the name (first match wins, in order). Krea 2 Turbo is DISTILLED -> 8 steps, guidance 0.0 (guidance off, one forward per step). Krea 2 Raw is the non-distilled mid-training checkpoint -> 28 steps + real CFG 4.5, roughly 7x the cost. Keep 'turbo' BEFORE 'krea' so Krea-2-Turbo does not match the generic entry.",
     "model_profiles": {
-            "rapid": {
-                    "steps": 8,
-                    "guidance": 1.0
-            },
-            "lightning": {
-                    "steps": 8,
-                    "guidance": 1.0
-            },
-            "qwen": {
-                    "steps": 30,
-                    "guidance": 4.0
-            },
-            "edit": {
-                    "steps": 30,
-                    "guidance": 4.0
-            }
+        "turbo": {
+            "steps": 8,
+            "guidance": 0.0
+        },
+        "raw": {
+            "steps": 28,
+            "guidance": 4.5
+        },
+        "krea": {
+            "steps": 8,
+            "guidance": 0.0
+        }
     },
-    "default_model_profile": {"steps": 30, "guidance": 4.0},
-
+    "default_model_profile": {
+        "steps": 8,
+        "guidance": 0.0
+    },
     "_default_loras_help": "LoRAs applied at startup (in loras_dir). Names or [name, weight]. Empty = none. Set a Lightning LoRA here + default_performance 'Lightning (8 steps)' + default_gen_steps 8 + default_guidance 1.0 for a fast default.",
     "default_loras": [],
-    "_default_guidance_help": "Qwen 'guidance' = true_cfg_scale (real CFG, enables negative prompt). ~3-5 recommended.",
-    "_default_refine_help": "Upscale/refine pass OFF by default (txt2img only = fast startup). NB: the diffusion refine needs a non-quantized base; with a GGUF model it is skipped/limited. Enable per-run via the Upscale checkbox.",
-    "_zimage_omni_base_help": "Base edit repo providing text-encoder/VAE/processor when 'zimage_omni_model' is a .gguf transformer. Default Qwen/Qwen-Image-Edit-2509 (downloads ~17GB once).",
-    "zimage_omni_base": "Qwen/Qwen-Image-Edit-2509",
+    "_default_guidance_help": "Krea 2 convention: this drives guidance_scale DIRECTLY (velocity = cond + g*(cond-uncond); guidance is on as soon as g > 0). NOT the Qwen true_cfg_scale scheme. Turbo is distilled -> 0.0. Raw -> ~4.5.",
+    "_default_refine_help": "Diffusion refine is UNAVAILABLE with Krea 2 (diffusers has no Krea2Img2ImgPipeline) -- the UI hides the refine controls. ESRGAN upscale still works: it does not go through the diffusion model.",
     "default_prompt": "",
     "default_negative_prompt": "",
     "default_styles": [],
@@ -75,14 +86,13 @@
     "default_width": 1024,
     "default_height": 1024,
     "default_gen_steps": 24,
-    "default_guidance": 4.0,
+    "default_guidance": 0.0,
     "default_sampler": "euler",
     "default_schedule": "sgm_uniform",
     "default_image_number": 1,
     "default_seed": -1,
-
     "default_factor": 2.0,
-    "default_denoise": 0.30,
+    "default_denoise": 0.3,
     "default_refine": false,
     "default_refine_first": false,
     "default_refine_steps": 12,
@@ -93,9 +103,8 @@
     "default_cpu_offload": "model",
     "attention_slice_above": 1664,
     "auto_refine_tile_above": 1664,
-    "refine_tile_denoise_cap": 0.40,
+    "refine_tile_denoise_cap": 0.4,
     "refine_tile_prompt": "",
-
     "checkpoints_dir": "",
     "loras_dir": "",
     "wildcards_dir": "",
@@ -105,14 +114,12 @@
     "lora_weight_max": 2.0,
     "_lora_weight_range_help": "Min/max of the LoRA 'Weight' sliders (Models > LoRA). NEGATIVE weights are allowed and useful: a LoRA applied at a negative weight pushes AWAY from what it was trained on (e.g. a 'skinny slider' LoRA at -1 gives the opposite effect, an 'age slider' at -0.5 makes the subject younger/older the other way). 0 = LoRA has no effect. Typical range: -2..2; beyond ~±1.5 most LoRAs burn/deform the image. Set lora_weight_min to 0 if you never want negatives. If the values are not numbers, or min >= max, the app falls back to -2..2 and logs it.",
     "lora_slots": 3,
-    "zimage_omni_model": "Qwen/Qwen-Image-Edit-2509",
     "faceswap_model_path": "",
     "faceswap_model_url": "",
     "faceswap_restore": false,
     "faceswap_restore_blend": 0.8,
     "faceswap_restore_path": "",
     "faceswap_restore_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/main/gfpgan_1.4.onnx",
-
     "default_save_mode": "local",
     "default_output_dir": "out",
     "default_output_format": "png",
@@ -121,10 +128,12 @@
     "metadata_scheme": "crispz",
     "wildcards_in_order": false,
     "save_pre_upscale": false,
-    "gguf_arch": "qwen_image",
-    "_gguf_arch_help": "Architecture accepted for .gguf checkpoints, read from the file header (general.architecture). Only matching files are listed in the checkpoint dropdown; the rest are skipped at startup with a reason, instead of failing after a long load. Known values: \"flux\" (FLUX.1 dev/schnell/Krea), \"qwen_image\", \"krea2\" (Krea 2 -- its OWN non-Flux architecture, needs ComfyUI + its own encoder/VAE, not loadable here), plus llama/gemma3/... for LLM GGUFs. A GGUF whose header cannot be read is kept (never discard a valid model on a doubt).",
     "civitai_api_key": "",
-    "civitai_batch": {"enabled": true, "sleep": 0.5, "check_updates": true},
+    "civitai_batch": {
+        "enabled": true,
+        "sleep": 0.5,
+        "check_updates": true
+    },
     "_civitai_batch_help": "Batch CivitAI enrichment. enabled=true shows the '🔄 Fetch all missing' button on the Asset Browser LoRAs/Models tabs and lets cz_civitai_batch.py (civitai_index.bat/.sh) run. sleep = seconds between requests (rate-limit friendly); check_updates = also flag models that have a newer version on CivitAI. enabled=false hides the button (per-model 🔎 fetch still works).",
     "asset_browser": {
         "enabled": false,
@@ -135,6 +144,8 @@
         "_thumb_workers_help": "Threads used to generate thumbnails (0 = auto: min(8, CPU cores)). Thumbnails are made in parallel, both for background indexing and for the Asset Browser's 'Rebuild ALL thumbnails (force)' button. Lower it if indexing a huge folder makes the machine sluggish.",
         "blur_thumbnails": false
     },
-
-    "log_level": "info"
+    "log_level": "info",
+    "quantization": "float8_weight_only",
+    "_quantization_help": "torchao scheme applied to the transformer at load. Krea 2 is 12.9B: raw bf16 needs ~26 GB and overflows a 32 GB card (measured 35.6 GB peak, 59 s/step). float8_weight_only -> 22.8 GB, ~2.4 s/step, visually identical (weights only, activations stay bf16). Options: float8_weight_only | int8_weight_only | int4_weight_only | float8_dynamic | none (needs >32 GB VRAM).",
+    "_default_cpu_offload_help": "Krea 2 transformer (13 GB quantized) + Qwen3-VL text encoder (8.9 GB) do not both fit alongside activations on 32 GB -> 'model' keeps the encoder on CPU between generations. Measured 22.8 GB peak with float8_weight_only."
 }
