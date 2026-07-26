@@ -628,6 +628,104 @@ Turn it off or tune it in `config.txt`:
 
 ---
 
+## Krea 2 — gated access & licensing
+
+> **Fork status.** The model layer is ported: `Krea2Pipeline` +
+> `Krea2Transformer2DModel`, quantized on the fly with torchao. Measured on an
+> RTX 5090: **1024×1024, 8 steps, 19.5 s, 22.8 GB VRAM**.
+>
+> Krea 2 is **text-to-image only**. diffusers exposes no `Krea2Img2ImgPipeline`
+> and no `Krea2InpaintPipeline`, so refine, upscale-refine, harmonize, inpaint,
+> outpaint and reframe(contain) have no engine. Those tabs and controls are
+> **hidden** in the UI (driven by `cz_pipeline.CAPABILITIES`), and the matching
+> functions raise `UnsupportedFeature` rather than failing obscurely. ESRGAN
+> upscaling still works — it never touches the diffusion model.
+>
+> To refine or inpaint a Krea 2 image, pass it through **crispz-studio**
+> (Z-Image) or **crispz-krea** (FLUX), which do have those pipelines.
+
+### Which files actually work
+
+| Source | Loadable |
+|---|---|
+| `krea/Krea-2-Turbo`, `krea/Krea-2-Raw` (HF, diffusers layout) | **yes**, via `from_pretrained` |
+| Civitai `krea2TurboOfficialComfy_krea2TurboFp8.safetensors` | no |
+| Civitai `krea2Raw_v10.safetensors` (fp8 **and** bf16) | no |
+| Community GGUF quants | no |
+
+Download size is **~35.7 GB per variant** (transformer 26.3 GB + Qwen3-VL text
+encoder 8.9 GB + VAE/tokenizer/scheduler 0.5 GB). The `images/` folder and the
+single-file `turbo.safetensors` / `raw.safetensors` in those repos are not
+needed and are not fetched by `from_pretrained`.
+
+### Getting access (both repos are gated)
+
+1. **Create or pick a Hugging Face account.** Licence acceptance is tied to the
+   *account*, not to the browser — accepting while logged in as another account
+   will not grant access to your token.
+2. **Accept the licence on each variant you want**, while logged in as that
+   account:
+   - <https://huggingface.co/krea/Krea-2-Turbo>
+   - <https://huggingface.co/krea/Krea-2-Raw>
+
+   You must supply name, email and company, then agree to the Krea 2 Community
+   License Agreement and the Acceptable Use Policy. Approval is automatic
+   (`gated: auto`) and effective immediately.
+3. **Create a READ token** for that same account at
+   <https://huggingface.co/settings/tokens>. A classic read token is enough; a
+   fine-grained token needs explicit permission on gated repos.
+4. **Make the token available**, either way:
+   - `huggingface-cli login` (stores it once, machine-wide), or
+   - `"hf_token": "hf_..."` in `config.txt` (**gitignored — never commit it**).
+5. **Verify** before downloading 35 GB:
+
+   ```bash
+   python -c "from huggingface_hub import HfApi, get_token, hf_hub_download; print(HfApi().whoami(token=get_token())['name']); hf_hub_download('krea/Krea-2-Turbo','model_index.json'); print('access OK')"
+   ```
+
+   A `GatedRepoError` here means the licence was accepted on a different
+   account than the token's. Check the account name printed above.
+
+### Licensing obligations — read before deploying
+
+Krea 2 is **not** permissively licensed. See [`NOTICE`](NOTICE) for the summary
+shipped with this repo; the authoritative text is the
+[Krea 2 Community License Agreement](https://krea.ai/krea-2-licensing).
+
+The points that change what you may do with this app:
+
+- **Commercial use is capped by revenue.** Permitted only below **1,000,000 USD**
+  total company-wide annual revenue (trailing 12 months, all sources, all
+  affiliated entities). At or above it you need an Enterprise Licence from Krea
+  *before* any commercial use (`opensource@krea.ai`). Cross the threshold while
+  using it and you must stop commercial use immediately.
+- **Content filtering is mandatory for deployments** (§4.2). If you serve this
+  UI to anyone but yourself — the `run_*_lan.bat` / `run_*_web.bat` launchers,
+  a tunnel, a hosted instance — you must implement reasonable input/output
+  filtering (e.g. `Falconsai/nsfw_image_detection`, NudeNet, CompVis safety
+  checker, Hive, Azure AI Content Safety, or human review). Failure to do so is
+  named explicitly as a breach and an indemnification trigger (§8(c)).
+  **crispz ships no such filter today** — running Krea 2 on a LAN/web launcher
+  is your responsibility, not the app's.
+- **You own your images** (§5.3). Krea claims no ownership of Outputs, and you
+  are solely responsible for them.
+- **Do not defeat watermarking or provenance mechanisms** (§4.1(c)).
+- **The licence is revocable**, and Krea may terminate for convenience on 30
+  days' notice (§9.2); on termination you must destroy all copies of the model
+  and any derivatives (§9.4). Any breach terminates it automatically and
+  immediately (§9.1).
+- **Redistributing weights or a derivative model** requires shipping the
+  licence, prefixing the model name with `Krea`, stating that you modified it,
+  and keeping the attribution notice (§3.1, §3.2). This app does not
+  redistribute weights — it downloads them from Hugging Face — so these apply
+  to you only if you publish your own fine-tune or LoRA merge.
+
+Compare with the other forks: Z-Image and FLUX carry no revenue cap and no
+content-filtering duty. This is the one model family in the crispz line where
+the licence constrains how you may ship it.
+
+---
+
 ## Running
 
 ### 1) Gradio UI (default)

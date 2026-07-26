@@ -1,0 +1,92 @@
+# crispz-krea2 — environnement verrouille, venv ISOLE. Krea 2 (Turbo / Raw).
+#
+# POURQUOI CE FICHIER
+# requirements.txt donne les bornes ("ce qui doit marcher"). Ce fichier donne les
+# versions exactes d'un environnement reellement valide sur RTX 5090 / CUDA 12.8:
+# generation 1024x1024, 8 steps -> 19,5 s, 22,8 Go de VRAM au pic.
+#
+# UTILISATION (venv ISOLE, sans --system-site-packages)
+#   install.bat            (mode isole par defaut, utilise ce fichier)
+# ou a la main:
+#   py -3.10 -m venv .venv
+#   .venv\Scripts\python -m pip install --upgrade pip setuptools wheel
+#   .venv\Scripts\python -m pip install -r requirements-lock.txt
+#
+# NE PAS regenerer depuis `pip freeze` d'un venv --system-site-packages: on y capture
+# tout le site-packages global (comfy-cli, yt-dlp...), un ensemble non resoluble par pip
+# (comfy-cli exige click<=8.1.8 face a click 8.4.1).
+#
+# ---------------------------------------------------------------------------
+# TROIS CONTRAINTES PROPRES A CE FORK — ne pas les relacher sans mesurer
+# ---------------------------------------------------------------------------
+# 1. torchao est OBLIGATOIRE, pas optionnel. Krea 2 pese 26 Go en bf16 et DEBORDE une
+#    carte 32 Go. Mesure sur RTX 5090, 1024x1024, 8 steps:
+#        sans quantif : 35,63 Go au pic (spill RAM via PCIe) | 59,17 s/step | 473 s
+#        fp8 torchao  : 22,82 Go                             |  2,4  s/step |  19 s
+#    Sans torchao, l'app "marche" mais est inutilisable.
+#    NB: torchao 0.17 a change d'API (Float8WeightOnlyConfig() au lieu de la chaine
+#    "float8_weight_only") -> version EPINGLEE, un bump peut casser _quant_config().
+#
+# 2. transformers 5.x est IMPOSE par diffusers, contrairement aux autres forks crispz
+#    qui bornent transformers<5. La contrainte s'est inversee:
+#        diffusers (main) : huggingface-hub >=1.23.0,<2.0
+#        transformers 4.x : huggingface-hub >=0.34.0,<1.0   <-- incompatible
+#    Il faut donc transformers 5.x + hub 1.x. Ne PAS copier la borne <5 des autres forks.
+#
+# 3. Le commit diffusers doit contenir Krea2Pipeline (absent des commits utilises par
+#    crispz-studio / -krea / -qwen-edit). ed58810 le contient.
+#
+# CE QUE CE LOCK NE RESOUT PAS: les repos krea/Krea-2-Turbo et krea/Krea-2-Raw sont
+# GATED. Il faut accepter la licence sur huggingface.co AVEC LE COMPTE DU TOKEN (cf.
+# README, section "Krea 2 — gated access & licensing"), sinon GatedRepoError au premier
+# chargement. ~35,7 Go par variante.
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# diffusers: absent de PyPI en 0.40.0.dev0 -> epingle sur le commit qui expose Krea2Pipeline
+diffusers @ git+https://github.com/huggingface/diffusers@ed58810cb940e4e38e3d730b4b9c75d4db39cd4f
+
+# socle torch (volontairement hors requirements.txt, indispensable ici)
+torch==2.8.0+cu128
+torchvision==0.23.0+cu128
+torchaudio==2.8.0+cu128
+
+# quantification du transformer — voir contrainte 1 ci-dessus
+torchao==0.17.0
+
+# pile diffusion. transformers 5.x + hub 1.x: voir contrainte 2 ci-dessus.
+transformers==5.14.1
+huggingface-hub==1.24.0
+accelerate==1.14.0
+safetensors==0.8.0
+peft==0.19.1
+sentencepiece==0.1.96
+spandrel==0.4.1
+hf_xet==1.5.2
+
+# UI / service
+gradio==5.50.0
+fastapi==0.138.1
+uvicorn==0.35.0
+
+# imagerie / utilitaires
+pillow==10.4.0
+pillow-avif-plugin==1.5.5
+numpy==1.26.4
+scipy==1.14.0
+opencv-python==4.11.0.86
+einops==0.8.0
+omegaconf==2.3.0
+protobuf==6.31.0
+requests==2.32.5
+tqdm==4.66.4
+psutil==6.0.0
+
+# onglets optionnels (Remove BG, Face Swap)
+rembg==2.0.57
+insightface==1.0.1
+onnxruntime==1.18.1
+onnxruntime-gpu==1.23.2
+
+# PAS de 'gguf' ici, contrairement aux forks krea / qwen-edit: Krea 2 n'a pas de
+# from_single_file dans diffusers, donc aucun .gguf n'est chargeable.

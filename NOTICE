@@ -1,0 +1,58 @@
+NOTICE
+======
+
+crispz-krea2 is an independent, community-built application. It is NOT an
+official Krea product and is NOT endorsed by or affiliated with Krea.ai, Inc.
+
+This application does not bundle or redistribute any model weights. Weights are
+downloaded by the user directly from Hugging Face, under the license terms of
+their respective providers, and are subject to those terms.
+
+
+Krea 2
+------
+
+Krea 2 is licensed under the Krea 2 Community License Agreement.
+For more information, visit https://krea.ai/krea-2-licensing.
+
+Applies to the model variants krea/Krea-2-Turbo and krea/Krea-2-Raw.
+
+Key obligations carried by anyone who deploys this application with Krea 2
+(summary only -- the license text at the URL above prevails):
+
+  * Commercial use is permitted only below 1,000,000 USD total company-wide
+    annual revenue (trailing twelve months, all sources, all affiliated
+    entities). At or above that threshold an Enterprise License must be
+    obtained from Krea BEFORE any commercial use (opensource@krea.ai).
+
+  * If you deploy this application so that others can generate images with it
+    (LAN, web, hosted service), Section 4.2 requires reasonable and appropriate
+    content filtering. Running it locally for yourself is a different exposure
+    than serving it to third parties. See README, section "Krea 2 licensing".
+
+  * You own the images you generate; Krea claims no ownership of Outputs
+    (Section 5.3). You are solely responsible for them.
+
+  * Do not circumvent watermarking or content-provenance mechanisms
+    (Section 4.1(c)).
+
+  * If you redistribute the weights, or a derivative model, you must ship a
+    copy of the Krea 2 Community License Agreement, prefix any derivative model
+    name with "Krea" (e.g. "Krea 2 <Your Model Name>"), state that you modified
+    the model, and retain this notice (Sections 3.1 and 3.2).
+
+The license is revocable, and Krea may terminate it for convenience on 30 days
+notice (Section 9.2). On termination all copies of the model and of any
+derivatives must be destroyed (Section 9.4).
+
+
+Other components
+----------------
+
+crispz-krea2 itself is distributed under the terms in LICENSE.txt
+(CC BY-NC 4.0 -- Copyright (c) 2026 Mike Castro Demaria, Supersonique Studio).
+
+Third-party libraries (diffusers, transformers, PyTorch, Gradio, spandrel,
+insightface, rembg and others) remain under their own licenses. ESRGAN
+upscaling models, LoRAs and any other user-supplied assets remain under the
+licenses of their respective authors.
