@@ -341,10 +341,16 @@ def cli_main(argv=None):
                              "refine pass: caps VRAM and enables 4K+ without seams. Try 1024-1280.")
     parser.add_argument("--refine-overlap", type=int, default=DEFAULT_REFINE_OVERLAP,
                         help="Overlap (feather) of the Z-Image diffusion tiles")
-    parser.add_argument("--cpu-offload", choices=list(cz_pipeline.OFFLOAD_CHOICES), default="none",
+    # Defaut = la valeur DEJA resolue par cz_pipeline (env CZ_OFFLOAD > config
+    # default_cpu_offload > 'none'). Un default="none" en dur ecrasait silencieusement la
+    # config au lancement de l'UI: cli_main() appelle set_offload_mode(args.cpu_offload)
+    # meme sans argument, ce qui rendait 'default_cpu_offload' inoperant.
+    parser.add_argument("--cpu-offload", choices=list(cz_pipeline.OFFLOAD_CHOICES),
+                        default=cz_pipeline.OFFLOAD_MODE,
                         help="CPU offload of the diffusion pass (VRAM). none=all in VRAM | "
                              "model=offload per submodule (good tradeoff) | "
-                             "sequential=more aggressive, slower. Requires accelerate.")
+                             "sequential=more aggressive, slower. Requires accelerate. "
+                             "Default: config.txt 'default_cpu_offload'.")
     parser.add_argument("--guidance", type=float, default=0.0,
                         help="CFG guidance scale. 0 for Z-Image Turbo (default). "
                              "Z-Image Base needs ~3.5-5 (and ~20+ steps).")
