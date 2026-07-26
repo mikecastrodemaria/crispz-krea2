@@ -381,7 +381,7 @@ def _report_vram():
               de ce que nvidia-smi voit pour ce process.
     """
     if DEVICE != "cuda":
-        print("[VRAM] pas de GPU CUDA, mesure ignoree.", file=sys.stderr)
+        print("[VRAM] no CUDA GPU, measurement skipped.", file=sys.stderr)
         return
     alloc = torch.cuda.max_memory_allocated() / 1024**3
     reserved = torch.cuda.max_memory_reserved() / 1024**3
@@ -505,7 +505,7 @@ def _append_time_log(path, src, dst, t, save_mode, output_format):
         with open(path, "a", encoding="utf-8") as f:
             f.write(line)
     except Exception as e:
-        print(f"[AVERT] time-log echec: {e}", file=sys.stderr)
+        print(f"[WARN] time-log failed: {e}", file=sys.stderr)
 
 
 # ----------------------------------------------------------------------------
@@ -2656,12 +2656,12 @@ def build_ui():
                             # forces a un no-op: refine decoche, denoise a 0.
                             if not HAS_IMG2IMG:
                                 gr.Markdown(
-                                    "*Krea 2 ne fournit pas de pipeline img2img (pas de "
-                                    "`Krea2Img2ImgPipeline` dans diffusers) : le **refine par "
-                                    "diffusion est indisponible**. L'agrandissement ESRGAN "
-                                    "ci-dessous fonctionne normalement — il ne passe pas par le "
-                                    "modèle. Pour un refine, repassez l'image dans crispz-studio "
-                                    "(Z-Image) ou crispz-krea (FLUX).*")
+                                    "*Krea 2 ships no img2img pipeline (there is no "
+                                    "`Krea2Img2ImgPipeline` in diffusers), so the **diffusion "
+                                    "refine is unavailable**. ESRGAN enlargement below works "
+                                    "normally — it never goes through the model. To refine, run "
+                                    "the image through crispz-studio (Z-Image) or crispz-krea "
+                                    "(FLUX).*")
                             with gr.Row():
                                 inp = _crop_input("Drop image here / click to upload", 300)
                                 with gr.Column():
