@@ -112,10 +112,13 @@ def test_suggestions():
     # Derive de la source de verite (cz_pipeline.SAMPLER_CHOICES): ajouter un sampler
     # ne doit pas casser le test, mais la suggestion doit rester exhaustive.
     assert cz_ui._xyz_parse_values(fill) == list(cz_pipeline.SAMPLER_CHOICES)
+    # Presets et repos viennent de la CONFIG: les deriver evite que ce test casse sur
+    # un fork (FLUX/Qwen ont leurs propres presets et repos de base) a chaque merge.
     fill, ph = cz_ui._xyz_suggestions("Performance")
-    assert "Turbo (8 steps)" in cz_ui._xyz_parse_values(fill)
+    assert set(cz_ui._xyz_parse_values(fill)) == set(cz_ui.PERFORMANCE)
     fill, ph = cz_ui._xyz_suggestions("Checkpoint")       # repos officiels presents
-    assert "Tongyi-MAI/Z-Image-Turbo" in cz_ui._xyz_parse_values(fill)
+    for _repo in cz_ui.ZIMAGE_BASE_REPOS:
+        assert _repo in cz_ui._xyz_parse_values(fill)
     fill, ph = cz_ui._xyz_suggestions("Prompt S/R")       # pas d'insertion, aide seule
     assert fill == "" and "search term" in ph
     fill, ph = cz_ui._xyz_suggestions("(none)")
@@ -139,8 +142,11 @@ def test_cli_apply():
     cz_cli._xyz_cli_apply("Guidance", 3.5, p, {})
     cz_cli._xyz_cli_apply("Denoise", 0.4, p, {})
     assert p["gen_steps"] == 12 and p["guidance"] == 3.5 and p["denoise"] == 0.4
-    cz_cli._xyz_cli_apply("Performance", "Base CFG (28 steps)", p, {})
-    assert p["gen_steps"] == 28 and p["guidance"] == 4.0
+    # Preset pris dans la CONFIG (pas de nom code en dur: les forks en ont d'autres).
+    _name = list(cz_ui.PERFORMANCE)[-1]
+    _st, _g = cz_ui.PERFORMANCE[_name]
+    cz_cli._xyz_cli_apply("Performance", _name, p, {})
+    assert p["gen_steps"] == int(_st) and p["guidance"] == float(_g)
     cz_ui._XYZ_AXES["Prompt S/R"]["_term"] = "cat"
     cz_cli._xyz_cli_apply("Prompt S/R", "cat", p, {})      # 1re valeur = inchange
     assert p["prompt"] == "a red cat"
