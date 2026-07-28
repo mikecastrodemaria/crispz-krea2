@@ -241,9 +241,11 @@ FORCE_RATIO = (os.environ.get("CZ_FORCE_RATIO") or CONFIG.get("force_upscale_rat
 
 # Sampler / scheduler. Le pipeline Z-Image impose un schedule `sigmas` custom: seuls
 # les schedulers dont set_timesteps accepte `sigmas` fonctionnent. En pratique -> Euler
-# flow-matching (natif, defaut) et UniPC (multistep). Les DPM++ 2M / DPM2a de diffusers
-# ne prennent PAS de sigmas custom -> incompatibles (retires).
-SAMPLER_CHOICES = ("euler", "unipc")
+# flow-matching (natif, defaut), UniPC (multistep) et LCM flow-matching (interessant sur
+# les modeles distilles/Turbo: peu de steps, guidance ~0-1).
+# Les DPM++ 2M / DPM2a / DPM++ SDE (dpmpp_sde) de diffusers ne prennent PAS de sigmas
+# custom -> incompatibles (DPMSolverSDEScheduler exige en plus torchsde). Non exposes.
+SAMPLER_CHOICES = ("euler", "unipc", "lcm")
 SAMPLER = (os.environ.get("ZIMAGE_SAMPLER") or CONFIG.get("default_sampler") or "euler").strip().lower()
 if SAMPLER not in SAMPLER_CHOICES:
     SAMPLER = "euler"
@@ -342,12 +344,21 @@ def _build_scheduler(sampler, schedule, config):
     flag = _SCHEDULE_FLAG.get((schedule or "").lower())
     if flag:
         kw[flag] = True
-    if (sampler or "euler").lower() == "unipc":
+    name = (sampler or "euler").lower()
+    if name == "unipc":
         from diffusers import UniPCMultistepScheduler
         try:
             return UniPCMultistepScheduler.from_config(config, use_flow_sigmas=True, **kw)
         except Exception:
             return UniPCMultistepScheduler.from_config(config, **kw)
+    if name == "lcm":
+        # LCM flow-matching: accepte les sigmas custom du pipeline ET les flags de
+        # schedule. Repli sur Euler si la version de diffusers ne l'expose pas.
+        try:
+            from diffusers import FlowMatchLCMScheduler
+            return FlowMatchLCMScheduler.from_config(config, **kw)
+        except Exception as e:
+            _log(f"sampler 'lcm' unavailable ({e}); falling back to euler")
     return FlowMatchEulerDiscreteScheduler.from_config(config, **kw)
 
 
@@ -946,6 +957,28 @@ def _lora_names(loras):
     return [f"cz_lora_{i}" for i in range(len(loras))]
 
 
+def _clear_loras(pipe):
+    """Retire TOUT adaptateur LoRA du pipe pour repartir d'un etat vierge.
+
+    unload_lora_weights() seul laisse, selon les versions diffusers/peft, un peft_config
+    residuel sur le transformer -> le load suivant avertit ('Already found a peft_config')
+    et, comme on reutilise les memes noms d'adaptateurs (cz_lora_i), l'ancien adaptateur
+    peut rester en place (mauvaise LoRA appliquee). On supprime donc explicitement les
+    adaptateurs restants par nom apres l'unload."""
+    try:
+        pipe.unload_lora_weights()
+    except Exception as e:
+        _dbg(f"unload_lora_weights: {e}")
+    try:
+        listed = pipe.get_list_adapters() or {}
+        names = sorted({n for lst in listed.values() for n in (lst or [])})
+        if names:
+            pipe.delete_adapters(names)
+            _dbg(f"cleared leftover LoRA adapters: {names}")
+    except Exception as e:
+        _dbg(f"delete_adapters: {e}")
+
+
 def _apply_loras(pipe, force=False):
     """Synchronise les adaptateurs LoRA du pipe avec LORAS, SANS recharger le modele.
 
@@ -968,10 +1001,7 @@ def _apply_loras(pipe, force=False):
                  + ", ".join(f"{os.path.basename(p)}@{w}" for p, w in LORAS))
             return True
         if old_paths or force:
-            try:
-                pipe.unload_lora_weights()
-            except Exception as e:
-                _dbg(f"unload_lora_weights: {e}")
+            _clear_loras(pipe)
         names, weights = [], []
         for i, (p, w) in enumerate(LORAS):
             if os.path.isfile(p):

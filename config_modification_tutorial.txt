@@ -51,17 +51,17 @@ performance_presets     Editable Performance presets: name -> [steps, guidance].
 model_profiles          Per-model auto-tuning: a substring of the model name ->
                         {steps, guidance}. When you pick a checkpoint / set a
                         transformer override, steps + CFG auto-adjust to the first
-                        matching profile (in file order -> keep specific keys like
-                        "rapid"/"lightning" BEFORE "qwen"). Lightning/Rapid merges:
-                        8 steps, guidance 1.0 (CFG off). Qwen-Image base: ~30 / 4.0.
+                        matching profile (e.g. "juggernaut" -> CFG 6). 0 guidance =
+                        Turbo-style; >0 = Base/CFG models.
 default_model_profile   {steps, guidance} used when no model_profiles key matches.
 default_width/height    txt2img size (multiples of 16).
 default_gen_steps       txt2img steps.
-default_guidance        CFG (true_cfg_scale). 1 = Lightning/Rapid merges (CFG off).
-                        Qwen-Image base: ~4 (enables the negative prompt).
-default_sampler         Sampler par defaut: euler (natif flow-matching) ou unipc
-                        (UniPC multistep). Qwen-Image impose des sigmas custom -> DPM++/DPM2a
-                        incompatibles. Choix aussi dans l'UI (a cote du CFG).
+default_guidance        CFG. 0 = Z-Image Turbo. Z-Image Base: ~3.5-5.
+default_sampler         Sampler par defaut: euler (natif flow-matching), unipc (UniPC
+                        multistep), ou lcm (LCM flow-matching: peu de steps, guidance
+                        ~0-1 -> modeles distilles/Turbo). Z-Image impose des sigmas
+                        custom -> DPM++ 2M / DPM2a / dpmpp_sde incompatibles (non
+                        exposes). Choix aussi dans l'UI (a cote du CFG).
 default_schedule        Schedule de sigmas (facon ComfyUI): sgm_uniform (natif Z-Image),
                         beta, karras, exponential. Choix aussi dans l'UI (a cote du sampler).
 default_image_number    Batch size at startup (1-30).
