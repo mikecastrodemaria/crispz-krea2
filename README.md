@@ -81,6 +81,9 @@ SwarmUI. On top of crispz's upscaler it adds:
   trigger words / examples). A **🔄 Fetch all missing** button (LoRAs / Models tabs)
   enriches the whole folder in one go (same as the standalone `civitai_index.bat` /
   `.sh` — see below); models with a **newer version on CivitAI** get a **⚠ update** badge.
+  The badge only counts versions published for the **same base model**:
+  a LoRA whose page gains a Z-Image or FLUX release is not an update for your
+  Krea 2 copy.
   A **🖼 Rebuild ALL thumbnails (force)** button re-generates every thumbnail of the
   current tab from scratch (parallel, live progress) — for when a thumbnail is corrupt or
   you changed `thumbnail_size`.
