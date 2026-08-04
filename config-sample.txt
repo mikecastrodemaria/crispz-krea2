@@ -145,6 +145,8 @@
     "wildcards_in_order": false,
     "save_pre_upscale": false,
     "civitai_api_key": "",
+    "auth": "",
+    "_auth_help": "Login page for the UI. Empty = no login (fine on localhost). Set to \"user:password\" (several accounts: \"a:pw1,b:pw2\") BEFORE exposing the app on your LAN or through a tunnel (cloudflared etc.) - otherwise anyone with the URL can generate images and browse/delete your outputs. Also settable via --auth or the CRISPZ_AUTH env var.",
     "civitai_batch": {
         "enabled": true,
         "sleep": 0.5,
