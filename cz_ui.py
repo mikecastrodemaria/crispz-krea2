@@ -1708,7 +1708,8 @@ def _ui_generate(prompt, negative, styles, style_random, use_input, input_image,
                     except Exception as e:
                         _dbg(f"pre-upscale save failed: {e}")
             # Detaileur auto (visages) sur l'image FINALE (apres l'upscale eventuel).
-            if cz_detailer.DETAILER_ENABLED:
+            # HAS_IMG2IMG: Krea 2 n'a pas d'img2img -> le detaileur ne peut pas refiner.
+            if cz_detailer.DETAILER_ENABLED and HAS_IMG2IMG:
                 progress((i + 0.85) / n, desc=f"Detailing faces {i + 1}/{n}")
                 try:
                     img, _nf = cz_detailer.detail_faces(
@@ -2787,8 +2788,10 @@ def build_ui():
                         label="Upscale after generate — chain each txt2img image through the "
                               "Upscale pipeline (ESRGAN + refine), no manual step")
                     improve_btn = gr.Button("Improve prompt", scale=1, min_width=150)
+                # Le detaileur repasse chaque visage en img2img -> indisponible avec
+                # Krea 2 (pas de Krea2Img2ImgPipeline dans diffusers): cache comme le refine.
                 detail_faces_cb = gr.Checkbox(
-                    value=cz_detailer.DETAILER_ENABLED,
+                    value=cz_detailer.DETAILER_ENABLED and HAS_IMG2IMG, visible=HAS_IMG2IMG,
                     label="🔧 Detail faces — after each render (and upscale), detect faces and "
                           "re-refine each one at high resolution (ADetailer-style)")
                 improve_status = gr.Markdown("")
@@ -3407,6 +3410,7 @@ def build_ui():
                                                         "persisted (preferences.json).")
                         detailer_denoise_sl = gr.Slider(
                             0.1, 0.7, value=cz_detailer.DETAILER_DENOISE, step=0.05,
+                            visible=HAS_IMG2IMG,
                             label="Face detailer denoise (🔧 Detail faces)",
                             info="Strength of the per-face refine pass. 0.3-0.4 sharpens "
                                  "details; higher starts changing the identity. Applied live.")
