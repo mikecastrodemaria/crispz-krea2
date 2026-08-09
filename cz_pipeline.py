@@ -284,6 +284,25 @@ _PROGRESS = None
 # les handlers via cz_pipeline._STOP = ... et par request_stop().
 _STOP = False
 
+# Verrou GPU: serialise TOUTES les generations. Gradio ne serialise pas les events de
+# LISTENERS differents (Generate manuel vs Run queue vs detaileur): deux threads peuvent
+# alors appeler le MEME pipeline partage et stepper le MEME scheduler -> son index
+# depasse la fin ("IndexError: index 31 is out of bounds for dimension 0 with size 31",
+# scheduling_flow_match_euler_discrete.step). RLock: les imbrications d'un meme thread
+# (txt2img_run -> generate, process_one -> _refine_whole) restent libres.
+_GPU_LOCK = threading.RLock()
+
+
+def _gpu_serial(fn):
+    """Decorateur: execute fn sous _GPU_LOCK (une seule generation GPU a la fois)."""
+    import functools
+
+    @functools.wraps(fn)
+    def _locked(*args, **kwargs):
+        with _GPU_LOCK:
+            return fn(*args, **kwargs)
+    return _locked
+
 # Gestion du seed (facon Fooocus):
 #  _LAST_SEED         = seed CONCRET du dernier rendu (un -1 aleatoire est resolu en
 #                       valeur reelle) -> bouton "Reuse last seed" + metadonnees justes.
@@ -1260,6 +1279,7 @@ def _load_omni():
     raise UnsupportedFeature(_UNSUPPORTED_MSG["omni"])
 
 
+@_gpu_serial
 def generate_omni(refs, prompt, negative, width, height, steps, seed):
     """Edition par instruction Qwen-Image-Edit: edite une (ou plusieurs, via 2509) image(s)
     d'entree selon le prompt d'instruction. Conserve la signature de l'upstream (cz_ui).
@@ -1294,6 +1314,7 @@ def load_pipe():
     return get_pipe("img2img")
 
 
+@_gpu_serial
 def generate(prompt, width, height, steps, seed, negative_prompt=""):
     """txt2img Krea 2: genere une image depuis un prompt. guidance_scale direct
     (= curseur guidance, ~4.0), ~30-50 steps conseilles. Le negative prompt agit grace au
@@ -1390,6 +1411,7 @@ def _reframe_canvas(image, ratio_w, ratio_h, overlap=8):
     return canvas, mask, nw, nh
 
 
+@_gpu_serial
 def inpaint_run(background, mask, prompt, steps, denoise, seed):
     """Inpaint: regenere la zone blanche du masque selon le prompt
     (ZImageInpaintPipeline). background + mask = PIL (L: blanc = a changer)."""
@@ -1517,6 +1539,7 @@ def reframe(image, ratio_w, ratio_h, fit, prompt, steps, seed, strength=1.0):
     return out
 
 
+@_gpu_serial
 def outpaint(image, ratio_w, ratio_h, prompt, steps, seed):
     """Compat (CLI --reframe et appels existants): reframe en mode 'contain' (outpaint),
     borne a la resolution optimale du modele."""
@@ -1591,6 +1614,7 @@ def _make_generator(seed):
     return torch.Generator(DEVICE).manual_seed(int(seed)) if int(seed) >= 0 else None
 
 
+@_gpu_serial
 def _refine_whole(pipe, image, denoise, steps, prompt, seed):
     """Passe Qwen-Image img2img sur l'image entiere (ou une tuile). Le slicing est pose
     selon la taille reelle traitee: tuile 1024 -> OFF (rapide), whole 2K+ -> ON.
@@ -1689,6 +1713,7 @@ def _refine_tiled(pipe, image, denoise, steps, prompt, seed, tile, overlap):
 # Orchestration : process_one, batch txt2img (run/_gen_meta restent dans app.py
 # car run emet des gr.Error pour l'UI).
 # ----------------------------------------------------------------------------
+@_gpu_serial
 def process_one(image, esrgan_model, factor, denoise, steps, prompt, seed, tile, overlap,
                 refine_tile=DEFAULT_REFINE_TILE, refine_overlap=DEFAULT_REFINE_OVERLAP,
                 do_esrgan=True, refine_first=False, apply_force_ratio=False):
@@ -1776,6 +1801,7 @@ def process_one(image, esrgan_model, factor, denoise, steps, prompt, seed, tile,
     return result, timings
 
 
+@_gpu_serial
 def txt2img_run(prompt, width, height, gen_steps, seed, negative_prompt="",
                 upscale=False, esrgan_model=None, factor=2.0, denoise=0.30, steps=12,
                 tile=DEFAULT_TILE, overlap=DEFAULT_OVERLAP,
