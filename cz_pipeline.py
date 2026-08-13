@@ -238,6 +238,17 @@ def _quant_config():
 # (defaut). Format: 'W:H' ou 'WxH' (ex. '13:19', '832x1216'). Pilotable par l'UI (case a
 # cocher + dropdown Aspect ratio) via set_force_ratio, ou par config.txt 'force_upscale_ratio'.
 FORCE_RATIO = (os.environ.get("CZ_FORCE_RATIO") or CONFIG.get("force_upscale_ratio") or "").strip()
+# Comment atteindre le ratio force: 'crop' = recadrage centre (perd les bords, defaut),
+# 'extend' = outpaint des bandes manquantes. NB Krea 2: pas de pipeline inpaint ->
+# 'extend' leve le message UnsupportedFeature clair (l'UI ne propose que Off/Crop).
+FORCE_RATIO_MODE = (os.environ.get("CZ_FORCE_RATIO_MODE")
+                    or CONFIG.get("force_ratio_mode") or "crop").strip().lower()
+# Passe de fusion des raccords du mode extend (sans objet tant que Krea 2 n'a pas
+# d'inpaint, garde pour parite de config avec la famille). 0 = desactive.
+try:
+    EXTEND_DENOISE = float(CONFIG.get("force_ratio_extend_denoise", 0.22) or 0.0)
+except Exception:
+    EXTEND_DENOISE = 0.22
 
 # Sampler / scheduler. Le pipeline Z-Image impose un schedule `sigmas` custom: seuls
 # les schedulers dont set_timesteps accepte `sigmas` fonctionnent. En pratique -> Euler
@@ -1363,10 +1374,17 @@ def round_to_multiple(x, m=16):
 
 def set_force_ratio(spec):
     """Definit le ratio force pour upscale/img2img: 'W:H' / 'WxH' (ex '13:19', '832x1216')
-    ou '' pour desactiver (ratio natif preserve). Pilote par la case a cocher UI."""
+    ou '' pour desactiver (ratio natif preserve). Pilote par le radio UI."""
     global FORCE_RATIO
     FORCE_RATIO = (spec or "").strip()
     _log(f"force ratio -> {FORCE_RATIO or '(off, ratio natif preserve)'}")
+
+
+def set_force_ratio_mode(mode):
+    """'crop' (recadrage centre) ou 'extend' (outpaint -- indisponible sur Krea 2)."""
+    global FORCE_RATIO_MODE
+    FORCE_RATIO_MODE = "extend" if str(mode or "").strip().lower() == "extend" else "crop"
+    _log(f"force ratio mode -> {FORCE_RATIO_MODE}")
 
 
 def _parse_ratio(spec):
@@ -1396,6 +1414,26 @@ def _crop_to_ratio(image, ratio_w, ratio_h):
     nh = max(1, int(round(w / target)))    # trop haut -> couper haut/bas
     y0 = (h - nh) // 2
     return image.crop((0, y0, w, y0 + nh))
+
+
+def _extend_to_ratio(image, ratio_w, ratio_h, prompt, steps, seed):
+    """Amene l'image au ratio cible en l'ETENDANT (outpaint) au lieu de recadrer.
+    Sur Krea 2 il n'y a PAS de pipeline inpaint: outpaint_directions leve le message
+    UnsupportedFeature clair. Garde pour parite de code avec la famille (l'UI ne
+    propose pas ce mode ici; seul un force_ratio_mode='extend' en config y mene)."""
+    image = image.convert("RGB")
+    w, h = image.size
+    target = float(ratio_w) / float(ratio_h)
+    cur = w / h
+    if abs(cur - target) < 1e-3:
+        return image
+    if cur < target:                       # trop etroit -> elargir gauche + droite
+        pad = target * h - w
+        return outpaint_directions(image, None, ["left", "right"], prompt, steps, seed,
+                                   expand=pad / (2.0 * w))
+    pad = w / target - h                   # trop large -> etendre haut + bas
+    return outpaint_directions(image, None, ["top", "bottom"], prompt, steps, seed,
+                               expand=pad / (2.0 * h))
 
 
 def _reframe_canvas(image, ratio_w, ratio_h, overlap=8):
@@ -1730,16 +1768,22 @@ def process_one(image, esrgan_model, factor, denoise, steps, prompt, seed, tile,
     do_esrgan=False -> img2img pur (saute l'etage ESRGAN, refine sur l'image native).
     refine_first=True -> refine PUIS ESRGAN (la diffusion tourne a la resolution
     native = bien plus rapide), au lieu de ESRGAN PUIS refine (detail en haute-def).
-    apply_force_ratio=True + FORCE_RATIO defini -> recadre l'ENTREE au ratio choisi
-    (crop to fit, facon Fooocus) avant traitement. Sinon: ratio natif preserve."""
+    apply_force_ratio=True + FORCE_RATIO defini -> amene l'ENTREE au ratio choisi avant
+    traitement: FORCE_RATIO_MODE 'crop' = recadrage centre (facon Fooocus), 'extend' =
+    outpaint (indisponible sur Krea 2 -> UnsupportedFeature). Sinon: ratio natif."""
     timings = {"esrgan": 0.0, "refine": 0.0}
     image = image.convert("RGB")
     if apply_force_ratio and FORCE_RATIO:
         r = _parse_ratio(FORCE_RATIO)
         if r:
             _before = image.size
-            image = _crop_to_ratio(image, r[0], r[1])
-            _log(f"force ratio {r[0]}:{r[1]} -> crop {_before[0]}x{_before[1]} "
+            if FORCE_RATIO_MODE == "extend":
+                image = _extend_to_ratio(image, r[0], r[1], prompt, max(6, int(steps)), seed)
+                _verb = "extend (outpaint)"
+            else:
+                image = _crop_to_ratio(image, r[0], r[1])
+                _verb = "crop"
+            _log(f"force ratio {r[0]}:{r[1]} -> {_verb} {_before[0]}x{_before[1]} "
                  f"to {image.size[0]}x{image.size[1]}")
     w0, h0 = image.size
     use_esrgan = bool(do_esrgan and esrgan_model)

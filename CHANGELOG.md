@@ -3,6 +3,17 @@
 All notable changes to crispz-studio. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — Force aspect ratio radio (crop only on Krea 2) + README accuracy
+
+Ported from crispz-studio, gated by capabilities: the Upscale/img2img "Force aspect
+ratio" checkbox becomes a radio — **Off / Crop to fit**. The family's **Extend
+(outpaint)** mode is hidden here (Krea 2 has no inpaint pipeline; forcing
+`force_ratio_mode: "extend"` in config raises the clear UnsupportedFeature message).
+The config keys `force_ratio_mode` / `force_ratio_extend_denoise` exist for parity.
+README fixed where it inherited studio wording: **no single-file checkpoint loads on
+Krea 2** (no `from_single_file` on `Krea2Transformer2DModel`) — HF/diffusers repos
+only. Unit tests: `tests/test_force_ratio.py` (crop, setter, gated extend, UI mapping).
+
 ## Unreleased — Fix: a LoRA picked as checkpoint no longer hunts for an SD1.5 config
 
 **Why.** A LoRA file misfiled in a checkpoints folder (e.g. `ZITnsfwLoRAv3.safetensors`)

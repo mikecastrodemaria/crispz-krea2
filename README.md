@@ -46,15 +46,19 @@ SwarmUI. On top of crispz's upscaler it adds:
   (Turbo / Z-Image) with single-file `.safetensors` from a main **and** an optional
   extra folder, a **Transformer override** (diffusers repo/folder, e.g. Juggernaut-Z),
   and **multi-LoRA** (configurable **1–10 slots** + trigger words). Picking a model also
-  auto-syncs the Performance preset. FP8 and INT8/INT4-quantized checkpoints are skipped
-  (diffusers can't load them) - use the BF16/FP16 build.
+  auto-syncs the Performance preset. NB Krea 2: `Krea2Transformer2DModel` has **no
+  single-file loader** — Civitai `.safetensors` / GGUF / FP8 checkpoints cannot be
+  loaded at all (clear message at selection); only HF/diffusers repos work.
+- **Force aspect ratio on Upscale/img2img** (Settings > Aspect ratio): radio
+  **Off** / **Crop to fit** (centre-crop, Fooocus-style). The family's **Extend
+  (outpaint)** mode is hidden here: Krea 2 has no inpaint pipeline.
 - **Presets (Fooocus-style)** (Settings > ⭐ Presets): **save / load / update / delete**
   presets — a preset bundles prompt, styles, size, steps/CFG, sampler, checkpoint,
   transformer + LoRAs, and **Load** switches the model/LoRAs too. Stored in `presets/*.json`.
   A **basic preset is auto-created for every loadable model** (on startup and when you
   Refresh the checkpoint list) if it doesn't already exist yet — named after the model,
   with steps/CFG from its profile. Existing presets are never overwritten; skipped
-  FP8/INT8-INT4 models get none.
+  models get none.
 - **Seed**: **♻️ Reuse last seed** (refills the real seed of the previous render) + **Fix
   seed** (no +1 per image). A random `-1` seed is resolved to a concrete value so it is
   actually saved in the metadata.
@@ -398,9 +402,10 @@ python app.py --txt2img --prompt "..." \
 python app.py --zimage-transformer "D:/models/zimage_civitai.safetensors" ...
 ```
 
-The single-file is loaded as the **transformer**; the **VAE + Qwen3 text encoder**
-still come from the base repo (`Tongyi-MAI/Z-Image-Turbo` by default). Use a
-**BF16/FP16** checkpoint - FP8/GGUF ComfyUI variants do not load cleanly in diffusers.
+NB Krea 2: **single-file checkpoints are not supported at all** on this fork
+(`Krea2Transformer2DModel` has no `from_single_file`) — the flags above only accept
+HF/diffusers repos or folders; a `.safetensors`/`.gguf` path is refused with a clear
+message.
 
 ### Turbo vs Base (`--guidance`)
 
@@ -496,9 +501,9 @@ Juggernaut-Z is a **Z-Image Base** fine-tune → set **Performance = "Base CFG"*
 
 **Gotchas**
 
-- Checkpoints must be **BF16/FP16**. FP8 / INT8-INT4 / GGUF / SVDQ (ComfyUI) variants
-  do **not** load in diffusers and are **auto-hidden** from the checkpoint list (a line
-  is logged: `checkpoint skipped (FP8 | INT8/INT4 quantized, ...)`). Pick the BF16 build.
+- **No single-file checkpoint loads on Krea 2** (no `from_single_file` on its
+  transformer class): Civitai `.safetensors`, GGUF, FP8… are all refused with a clear
+  message. Use HF/diffusers repos; LoRAs work normally.
 - If the checkpoint is a **Z-Image Base** model (not Turbo), set **Performance →
   "Base CFG (28 steps)"** (guidance ~4, more steps), otherwise the result is flat.
 - Verify what loaded with `run.bat --debug`:
