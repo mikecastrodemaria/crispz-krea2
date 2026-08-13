@@ -926,10 +926,14 @@ def _set_aspect(name):
     return w, h
 
 
-def _ui_set_force_ratio(on, aspect_name):
-    """UI: (dés)active le ratio force pour Upscale/img2img. ON -> crop l'entree au ratio
-    de l'Aspect ratio choisi ; OFF -> ratio natif preserve. Pose l'etat dans cz_pipeline."""
-    set_force_ratio(aspect_name if on else "")
+def _ui_set_force_ratio(mode, aspect_name):
+    """UI: ratio force pour Upscale/img2img. 'Off' -> ratio natif preserve;
+    'Crop to fit' -> recadrage centre au ratio de l'Aspect ratio choisi;
+    'Extend (outpaint)' -> etend l'image au ratio (absent sur Krea 2: pas d'inpaint).
+    Pose l'etat dans cz_pipeline."""
+    m = str(mode or "Off").strip().lower()
+    set_force_ratio("" if m.startswith("off") else aspect_name)
+    cz_pipeline.set_force_ratio_mode("extend" if m.startswith("extend") else "crop")
 
 
 def _set_performance(name, *slot_vals):
@@ -3111,12 +3115,19 @@ def build_ui():
                         aspect = gr.Dropdown(list(ASPECT_RATIOS),
                                              value=CONFIG.get("default_aspect_ratio", "1024 x 1024  (1:1)"),
                                              label="Aspect ratio")
-                        force_ratio_cb = gr.Checkbox(
-                            value=bool(cz_pipeline.FORCE_RATIO),
-                            label="Force aspect ratio on Upscale/img2img (crop input to fit)",
-                            info="When ON, the loaded image is centre-cropped to the Aspect ratio "
-                                 "above before Upscale/img2img (Fooocus-style). OFF = keep the "
-                                 "input's native ratio.")
+                        # Extend (outpaint) exige le pipeline inpaint -> absent sur Krea 2:
+                        # le radio ne propose que Off/Crop (meme UX que la famille sinon).
+                        _fr_choices = ["Off", "Crop to fit"] + (
+                            ["Extend (outpaint)"] if HAS_INPAINT else [])
+                        force_ratio_cb = gr.Radio(
+                            _fr_choices,
+                            value=("Extend (outpaint)" if (cz_pipeline.FORCE_RATIO and
+                                   cz_pipeline.FORCE_RATIO_MODE == "extend" and HAS_INPAINT)
+                                   else "Crop to fit" if cz_pipeline.FORCE_RATIO else "Off"),
+                            label="Force aspect ratio on Upscale/img2img",
+                            info="Crop = the loaded image is centre-cropped to the Aspect ratio "
+                                 "above before Upscale/img2img (Fooocus-style, edges are lost). "
+                                 "Off = keep the input's native ratio.")
                         with gr.Row():
                             width = gr.Slider(256, 2048, value=int(CONFIG.get("default_width", 1024)),
                                               step=16, label="Width")
