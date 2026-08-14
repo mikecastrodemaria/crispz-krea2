@@ -178,11 +178,22 @@ python app.py --remove-bg -i photo.jpg --save-mode local --output-dir out
 # -> out/<name>_nobg_*.png (transparent)
 ```
 
-## Reframe / Outpaint  — `--reframe W:H`
+## Reframe  — `--reframe W:H` (+ `--reframe-fit contain|cover`)
+
+NB Krea 2: **only `--reframe-fit cover` works** (plain crop, no diffusion). The
+`contain` mode, `--expand` and `--inpaint-mask` need an inpaint pipeline that Krea 2
+does not have — they exit with the clear UnsupportedFeature message.
 
 ```bash
-python app.py --reframe 16:9 -i square.png --prompt "extend the scenery" \
-    --gen-steps 12 --guidance 6 --save-mode local --output-dir out
+# cover: fill the ratio then centre-crop — no generation, works on Krea 2
+python app.py --reframe 16:9 --reframe-fit cover -i square.png -o out/wide.png
+```
+
+## Force aspect ratio on Upscale  — `--force-ratio W:H` (crop mode)
+
+```bash
+# centre-crop the input to 2:3 before the ESRGAN upscale (extend is unavailable here)
+python app.py -i in.png --force-ratio 2:3 --factor 2 --save-mode local --output-dir out
 ```
 
 ## Face swap (post-process)  — `--faceswap-src` (needs insightface + inswapper)
