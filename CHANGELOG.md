@@ -3,6 +3,15 @@
 All notable changes to crispz-studio. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — CLI parity flags (capability-gated on Krea 2)
+
+Ported from crispz-studio: **`--reframe-fit contain|cover`** (only **cover** works here
+— plain crop, no diffusion; smoke-tested 1376×768), **`--force-ratio W:H`** +
+**`--force-ratio-mode`** (crop works; extend unavailable), and **`--expand`** /
+**`--inpaint-mask`** which exit with the clear UnsupportedFeature message (no inpaint
+pipeline on Krea 2 — verified). The `-o` single-file path now honours the forced ratio
+like the standard path. Documented in README_CLI.md with the Krea 2 limitations.
+
 ## Unreleased — Force aspect ratio radio (crop only on Krea 2) + README accuracy
 
 Ported from crispz-studio, gated by capabilities: the Upscale/img2img "Force aspect
