@@ -3,6 +3,25 @@
 All notable changes to crispz-studio. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — XYZ grid: full-Prompt A/B axis + type-ahead suggestions
+
+**Why.** Comparing whole prompts needed Prompt S/R gymnastics, and filling the
+Checkpoint/LoRA value fields meant copy-pasting long file names by hand.
+
+**What.**
+- **New `Prompt` axis**: each value is a **complete prompt** (quotes protect embedded
+  commas) — true A/B/C testing, combinable with any other axis. CLI too:
+  `--xyz "Prompt=a, \"b, with comma\", c"`, and `--prompt` becomes optional when a
+  Prompt axis is given. Sheet/job labels truncate long prompts. NB: the shorthand
+  `prompt` now resolves to this axis (exact match wins); `prompt s` still reaches
+  `Prompt S/R`.
+- **Type-ahead in the X/Y/Z value fields** (after 3 typed characters, ↑/↓ + Tab/Enter,
+  Escape, click): suggests from the lists validated at startup on the `Checkpoint` /
+  `LoRA` / `LoRA + weight` axes (`:1` auto-appended for the latter; on Krea 2 the
+  checkpoint list is the base repos only — no single-file loads here), and from the
+  local **`__wildcards__`** on the `Prompt` / `Prompt S/R` axes when the current token
+  starts with `__`. CSV segments respected. Disable with `xyz_grid.suggest: false`.
+
 ## Unreleased — CLI parity flags (capability-gated on Krea 2)
 
 Ported from crispz-studio: **`--reframe-fit contain|cover`** (only **cover** works here
