@@ -175,5 +175,9 @@
     "log_level": "info",
     "quantization": "float8_weight_only",
     "_quantization_help": "torchao scheme applied to the transformer at load. Krea 2 is 12.9B: raw bf16 needs ~26 GB and overflows a 32 GB card (measured 35.6 GB peak, 59 s/step). float8_weight_only -> 22.8 GB, ~2.4 s/step, visually identical (weights only, activations stay bf16). Options: float8_weight_only | int8_weight_only | int4_weight_only | float8_dynamic | none (needs >32 GB VRAM).",
-    "_default_cpu_offload_help": "Krea 2 transformer (13 GB quantized) + Qwen3-VL text encoder (8.9 GB) do not both fit alongside activations on 32 GB -> 'model' keeps the encoder on CPU between generations. Measured 22.8 GB peak with float8_weight_only."
+    "_default_cpu_offload_help": "Krea 2 transformer (13 GB quantized) + Qwen3-VL text encoder (8.9 GB) do not both fit alongside activations on 32 GB -> 'model' keeps the encoder on CPU between generations. Measured 22.8 GB peak with float8_weight_only.",
+    "provenance_watermark": "off",
+    "_provenance_watermark_help": "on = embed an invisible TrustMark watermark (Adobe, open source) in every saved image, for machine-readable AI disclosure (EU AI Act art. 50, applicable Aug 2 2026). Needs 'pip install trustmark' (see requirements-extra.txt); model (~40 MB) downloads on first use, then ~0.1s/image on CPU (the GPU is never touched). off (default) = no watermark. Read watermarks anytime via PNG Info > Check invisible watermark, or cz.bat --provenance -i img.png.",
+    "provenance_wm_id": "crispzAI",
+    "_provenance_wm_id_help": "Identifier embedded in the TrustMark watermark. Max 9 ASCII characters (error-corrected payload is ~68 bits) - longer values are truncated. E.g. your studio tag."
 }
