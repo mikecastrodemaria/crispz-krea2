@@ -11,7 +11,7 @@
     "job_queue": {
         "enabled": true
     },
-    "_job_queue_help": "Job queue panel ('+ Queue' snapshots all settings incl. model; 'Run queue' chains them; Stop pauses). enabled=false removes the UI entirely (zero cost).",
+    "_job_queue_help": "Job queue panel ('+ Queue' snapshots all settings incl. model; 'Run queue' chains them; ⏸ Pause finishes the current job then halts; Stop interrupts it mid-render and the interrupted job STAYS queued). The queue is saved to cache/queue.json after every change and every job, and restored at startup (persist=false to disable). enabled=false removes the UI entirely (zero cost).",
     "tag_autocomplete": {
         "enabled": true,
         "max_results": 8,
