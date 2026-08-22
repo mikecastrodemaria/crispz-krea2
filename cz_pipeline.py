@@ -1379,9 +1379,122 @@ def _load_transformer():
         _log(f"loading Krea 2 transformer (bf16, not quantized): {repo} ... "
              "[WARN] ~26 GB: overflows a 32 GB card, expect ~59 s/step")
     label = f"transformer {repo.split('/')[-1]}" + (f" ({QUANT_MODE})" if qc is not None else " (bf16)")
+    if qc is not None and _quant_cache_dir():
+        try:
+            return _load_transformer_quant_cached(repo, kw, label)
+        except Exception as e:
+            _log(f"quant cache path failed ({e}); falling back to direct load")
     return _load_monitor(
         label,
         lambda: Krea2Transformer2DModel.from_pretrained(repo, **kw))
+
+
+# ----------------------------------------------------------------------------
+# Cache de QUANTIFICATION: la forme torchao (~13 Go) est serialisee UNE FOIS
+# puis rechargee directement -> plus de lecture des ~26 Go bf16 ni de quantize
+# a chaque chargement (demarrage d'app compris). Pickle .bin impose:
+# les tenseurs torchao ne se serialisent pas en safetensors.
+# ----------------------------------------------------------------------------
+def _quant_cache_dir():
+    """Config quant_cache: 'auto' (defaut) = <app>/cache/krea2_quant,
+    chemin = dossier custom, 'off' = desactive (chargement direct)."""
+    mode = str(CONFIG.get("quant_cache", "auto") or "auto")
+    if mode.lower() == "off":
+        return None
+    if mode.lower() == "auto":
+        return os.path.join(cz_core.HERE, "cache", "krea2_quant")
+    return mode
+
+
+def _prune_quant_cache(keep):
+    """Evince les formes quantifiees les moins recemment utilisees au-dela de
+    quant_cache_max_gb (0 = illimite)."""
+    root = _quant_cache_dir()
+    cap = float(CONFIG.get("quant_cache_max_gb", 60) or 0)
+    if not root or not os.path.isdir(root) or cap <= 0:
+        return
+    entries = []
+    for d in os.listdir(root):
+        pth = os.path.join(root, d)
+        if not os.path.isdir(pth) or os.path.abspath(pth) == os.path.abspath(keep):
+            continue
+        size = sum(os.path.getsize(os.path.join(r, f))
+                   for r, _, fs in os.walk(pth) for f in fs)
+        entries.append((os.path.getmtime(pth), pth, size))
+    total = sum(sz for _, _, sz in entries)
+    if os.path.isdir(keep):
+        total += sum(os.path.getsize(os.path.join(r, f))
+                     for r, _, fs in os.walk(keep) for f in fs)
+    for _mt, pth, sz in sorted(entries):
+        if total <= cap * 1e9:
+            break
+        import shutil
+        shutil.rmtree(pth, ignore_errors=True)
+        total -= sz
+        _log(f"quant cache: evicted {os.path.basename(pth)} ({sz / 1e9:.1f} GB)")
+
+
+def _repo_sig(repo):
+    """Identite stable de la SOURCE du transformer: dossier local -> chemin +
+    taille + mtime des poids (une reconversion invalide donc la forme
+    quantifiee); repo HF -> son identifiant."""
+    try:
+        w = os.path.join(str(repo), "transformer",
+                         "diffusion_pytorch_model.safetensors")
+        if os.path.isfile(w):
+            st = os.stat(w)
+            return f"{os.path.abspath(repo)}|{st.st_size}|{int(st.st_mtime)}"
+    except Exception:
+        pass
+    return str(repo)
+
+
+def _load_transformer_quant_cached(repo, kw, label):
+    """Charge le transformer via le cache de quantification.
+
+    HIT: from_pretrained direct de la forme torchao picklee (use_safetensors=
+    False) - pas de dequant, pas de quantize, lecture ~13 Go au lieu de ~26.
+    MISS: chargement normal (bf16 + quantize torchao) PUIS save_pretrained
+    (safe_serialization=False) pour toutes les fois suivantes. Un echec de
+    serialisation est non-fatal (le modele charge est rendu tel quel)."""
+    from diffusers import Krea2Transformer2DModel
+    root = _quant_cache_dir()
+    sig = f"{_repo_sig(repo)}|{QUANT_MODE}"
+    key = _hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16]
+    stem = _re.sub(r"[^A-Za-z0-9_-]+", "_",
+                   os.path.basename(str(repo).rstrip("/\\")))[:40]
+    dst = os.path.join(root, f"{stem}_{key}")
+    stamp = os.path.join(dst, "source.json")
+    if os.path.isfile(stamp):
+        try:
+            with open(stamp, "r", encoding="utf-8") as f:
+                ok = json.load(f).get("sig") == sig
+        except Exception:
+            ok = False
+        if ok:
+            os.utime(dst, None)                       # LRU
+            _log(f"loading Krea 2 transformer (pre-quantized cache, "
+                 f"{QUANT_MODE}): reads ~13 GB, no dequant/quantize step ...")
+            return _load_monitor(
+                f"transformer {stem} ({QUANT_MODE}, pre-quantized)",
+                lambda: Krea2Transformer2DModel.from_pretrained(
+                    dst, torch_dtype=DTYPE, use_safetensors=False))
+    model = _load_monitor(
+        label, lambda: Krea2Transformer2DModel.from_pretrained(repo, **kw))
+    try:
+        t0 = time.time()
+        os.makedirs(dst, exist_ok=True)
+        model.save_pretrained(dst, safe_serialization=False)
+        with open(stamp, "w", encoding="utf-8") as f:
+            json.dump({"sig": sig, "quant": QUANT_MODE}, f)
+        _log(f"quantized form cached in {time.time() - t0:.0f}s -> next loads "
+             "of this checkpoint skip the 26 GB read and the quantize step")
+        _prune_quant_cache(dst)
+    except Exception as e:
+        _log(f"quant cache save failed (non-fatal, direct loads continue): {e}")
+        import shutil
+        shutil.rmtree(dst, ignore_errors=True)
+    return model
 
 
 def _lora_names(loras):

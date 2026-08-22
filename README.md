@@ -520,6 +520,10 @@ Juggernaut-Z is a **Z-Image Base** fine-tune → set **Performance = "Base CFG"*
 
 **Gotchas**
 
+- **Transformer loads are cached quantized**: the ~12 GB torchao form is
+  serialized once per checkpoint (`cache/krea2_quant`, `quant_cache*` config) -
+  after that, app startup and checkpoint swaps reload it in **~4 s** instead of
+  reading 26 GB bf16 and re-quantizing (~60-90 s). Verified pixel-identical.
 - **Single-file checkpoints convert on first load** (diffusers has no
   `from_single_file` for Krea 2 — the key mapping is ours): expect minutes and
   ~26 GB written to `cache/krea2_convert/` the FIRST time a Civitai checkpoint
