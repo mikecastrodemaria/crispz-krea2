@@ -3,6 +3,21 @@
 All notable changes to crispz-studio. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — quantization cache: every transformer load drops to ~4 s
+
+Loading Krea 2 - app startup and checkpoint swaps alike - used to read ~26 GB
+of bf16 and quantize it with torchao EVERY time (~60-90 s). The quantized form
+(~12 GB torchao pickle; tensor subclasses cannot go to safetensors, hence
+save_pretrained(safe_serialization=False)) is now serialized ONCE per
+(source weights, quantization scheme) into cache/krea2_quant (config
+quant_cache, LRU cap quant_cache_max_gb) and reloaded directly: **measured 4 s
+in a fresh process, pixel corr 1.0000** with the directly-loaded reference at
+the same seed. Works for the official repo AND converted single-file
+checkpoints; changing 'quantization' or reconverting a file re-caches; any
+serialization failure is non-fatal (direct load continues).
+Tests: tests/test_quant_cache.py (5 cases, stubbed - keying, hit/miss,
+invalidation, LRU prune, off switch).
+
 ## Unreleased — Civitai single-file checkpoints load at last: our own Comfy→diffusers conversion
 
 diffusers has no `from_single_file` for `Krea2Transformer2DModel` — so we wrote
