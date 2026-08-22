@@ -58,7 +58,7 @@ SwarmUI. On top of crispz's upscaler it adds:
   included, dequantized to bf16) is converted ONCE to a diffusers folder in
   `cache/krea2_convert/` (config `convert_cache*`, ~26 GB per entry, LRU-pruned),
   then loads through the normal quantized path. First selection converts
-  (minutes); next loads are normal. GGUF and SVDQuant/NVFP4 remain unsupported.
+  (minutes); next loads are normal. SVDQuant/NVFP4 remain unsupported.
 - **Force aspect ratio on Upscale/img2img** (Settings > Aspect ratio): radio
   **Off** / **Crop to fit** (centre-crop, Fooocus-style). The family's **Extend
   (outpaint)** mode is hidden here: Krea 2 has no inpaint pipeline.
@@ -423,7 +423,8 @@ python app.py --zimage-transformer "D:/models/zimage_civitai.safetensors" ...
 NB Krea 2: a Civitai `.safetensors` given to the flags above is **converted on
 first load** to a diffusers folder (`cache/krea2_convert/`, see `convert_cache*`
 in config) — bf16 and ComfyUI FP8/INT8 "scaled" (ConvRot included) both work;
-`.gguf` and SVDQuant files are refused with a clear message.
+`.gguf` ComfyUI-GGUF files (arch 'krea2') convert the same way
+(dequantized to bf16); SVDQuant files are refused with a clear message.
 
 ### Turbo vs Base (`--guidance`)
 
@@ -522,8 +523,9 @@ Juggernaut-Z is a **Z-Image Base** fine-tune → set **Performance = "Base CFG"*
 - **Single-file checkpoints convert on first load** (diffusers has no
   `from_single_file` for Krea 2 — the key mapping is ours): expect minutes and
   ~26 GB written to `cache/krea2_convert/` the FIRST time a Civitai checkpoint
-  is selected, instant loads after. GGUF and SVDQuant files stay refused. The
-  official base model must have been loaded once (its config seeds conversion).
+  is selected, instant loads after. `.gguf` (arch 'krea2') converts too — dequantized to bf16, it only
+  saves download size. SVDQuant files stay refused. The official base model
+  must have been loaded once (its config seeds conversion).
 - If the checkpoint is a **Z-Image Base** model (not Turbo), set **Performance →
   "Base CFG (28 steps)"** (guidance ~4, more steps), otherwise the result is flat.
 - Verify what loaded with `run.bat --debug`:

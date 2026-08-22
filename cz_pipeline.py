@@ -17,7 +17,8 @@ securite (CLI, API, appels directs).
 CHARGEMENT: from_pretrained sur un repo/dossier diffusers. Krea2Transformer2DModel
 n'a pas de from_single_file upstream -> les .safetensors Civitai (bf16 et FP8/INT8
 'scaled', ConvRot compris) passent par NOTRE conversion en dossier diffusers, en
-cache disque (cf. _converted_folder). Les GGUF restent inchargeables. Voir README.
+cache disque (cf. _converted_folder), et les .gguf ComfyUI-GGUF (arch 'krea2')
+suivent le meme chemin, dequantifies en bf16 par la lib gguf. Voir README.
 Le bf16 seul deborde une carte 32 Go (35,6 Go au pic, ~59 s/step) -> on quantifie a la
 volee via torchao (fp8 weight-only): 22,8 Go, ~2,4 s/step, qualite equivalente.
 
@@ -699,15 +700,15 @@ def list_checkpoints():
     """Dossiers diffusers locaux utilisables comme modele de base Krea 2.
 
     Les .safetensors single-file (Civitai bf16 et FP8/INT8 'scaled') sont
-    proposes: ils passent par la CONVERSION en dossier diffusers au premier
-    chargement (cache disque, cf. _converted_folder). Restent ecartes: les .gguf
-    (pas de lecteur pour cette architecture), les LoRA egarees et les SVDQuant
+    proposes, comme les .gguf ComfyUI-GGUF (arch 'krea2'): tout passe par la
+    CONVERSION en dossier diffusers au premier chargement (cache disque, cf.
+    _converted_folder; le GGUF est dequantifie en bf16 - il n'economise que le
+    telechargement, pas la VRAM). Restent ecartes: LoRA egarees et SVDQuant
     (schema INT4 non dequantifiable), avec la raison en console.
 
     Un dossier n'est retenu que s'il contient un model_index.json (layout diffusers).
     Les repos HF officiels sont ajoutes par l'UI (ZIMAGE_BASE_REPOS), pas ici."""
     out, seen = [], set()
-    n_gguf = 0
     for d in _checkpoint_dirs():
         if not os.path.isdir(d):
             continue
@@ -725,10 +726,9 @@ def list_checkpoints():
                     seen.add(f)
                     out.append(f)
             elif f.lower().endswith(".gguf"):
-                n_gguf += 1
-    if n_gguf:
-        _log(f"{n_gguf} GGUF file(s) skipped: no GGUF reader for the Krea 2 "
-             "architecture yet - use a .safetensors build (converted on first load).")
+                if f not in seen:
+                    seen.add(f)
+                    out.append(f)
     return sorted(out)
 
 
@@ -1183,6 +1183,47 @@ def _read_comfy_state_dict(path):
     return sd
 
 
+def _read_gguf_state_dict(path):
+    """Lit un .gguf Krea 2 (export ComfyUI-GGUF, arch 'krea2') et dequantifie
+    TOUT en DTYPE via la lib gguf (Q8_0/Q6_K/... -> float32 -> bf16). Les noms
+    de tenseurs sont les MEMES que le layout Comfy safetensors (verifie: 430
+    cles identiques) -> la meme table de renommage s'applique ensuite, et
+    gguf.quants.dequantize renvoie deja l'orientation torch (verifie sur
+    blocks.0.attn.wk: (1536, 6144)).
+
+    NB: contrairement a crispz-studio (Z-Image), le GGUF ne peut PAS rester
+    quantifie en VRAM ici (pas de from_single_file pour cette architecture):
+    il est converti UNE FOIS en bf16 (cache disque), la quantification runtime
+    reste torchao (float8_weight_only). Le Q8_0 ne fait donc gagner que le
+    telechargement, pas la VRAM."""
+    import gguf
+    from gguf import GGUFReader
+    t0 = time.time()
+    r = GGUFReader(path)
+    arch = ""
+    for fld in r.fields.values():
+        if fld.name == "general.architecture":
+            try:
+                arch = bytes(fld.parts[fld.data[0]]).decode("utf-8", "ignore")
+            except Exception:
+                pass
+    names = [t.name for t in r.tensors]
+    if arch != "krea2" and not any(n.startswith("txtfusion.") for n in names):
+        raise RuntimeError(
+            f"{os.path.basename(path)}: GGUF architecture '{arch or '?'}' is "
+            "not Krea 2 - this build only converts Krea 2 files.")
+    sd = {}
+    n_dq = 0
+    for t in r.tensors:
+        arr = gguf.quants.dequantize(t.data, t.tensor_type)
+        if t.tensor_type.name not in ("F32", "F16", "BF16"):
+            n_dq += 1
+        sd[t.name] = torch.from_numpy(np.ascontiguousarray(arr)).to(DTYPE)
+    _log(f"GGUF dequantized: {n_dq} quantized tensor(s) of {len(sd)} "
+         f"in {time.time() - t0:.1f}s")
+    return sd
+
+
 def _expected_transformer_keys():
     """(config_dict, {cle: shape}) du transformer du repo de base, SANS charger
     les poids (init_empty_weights). Le config.json vient du cache HF local du
@@ -1271,7 +1312,8 @@ def _converted_folder(path):
          "only: reads the full file, writes ~26 GB bf16 to the convert cache) ...")
     t0 = time.time()
     conf, expected = _expected_transformer_keys()
-    sd = _read_comfy_state_dict(path)
+    sd = (_read_gguf_state_dict(path) if path.lower().endswith(".gguf")
+          else _read_comfy_state_dict(path))
     out, unknown = {}, []
     for k, t in sd.items():
         r = _krea2_rename(k)
@@ -1311,23 +1353,17 @@ def _load_transformer():
     """Charge UNIQUEMENT le transformer courant (sans le reste du pipeline), depuis un repo
     diffusers, quantifie a la volee selon QUANT_MODE.
 
-    Un single-file .safetensors (Civitai, bf16 ou FP8/INT8 'scaled') passe par la
-    CONVERSION en dossier diffusers (_converted_folder, cache disque) puis par ce
-    meme chemin from_pretrained. Seuls les .gguf restent refuses (pas encore de
-    lecteur GGUF pour cette architecture).
+    Un single-file (.safetensors Civitai bf16/FP8/INT8 'scaled', ou .gguf
+    ComfyUI-GGUF) passe par la CONVERSION en dossier diffusers
+    (_converted_folder, cache disque) puis par ce meme chemin from_pretrained.
 
     Utilise au chargement complet ET pour l'echange a chaud (_swap_transformer)."""
     from diffusers import Krea2Transformer2DModel
     repo = ZIMAGE_TRANSFORMER or BASE_REPO
     if ZIMAGE_TRANSFORMER and _is_single_file(ZIMAGE_TRANSFORMER):
-        if ZIMAGE_TRANSFORMER.lower().endswith(".gguf"):
-            raise UnsupportedFeature(
-                f"Krea 2 GGUF single files are not supported yet "
-                f"({os.path.basename(ZIMAGE_TRANSFORMER)}): the conversion path "
-                "covers .safetensors (bf16 and FP8/INT8 scaled). Use a .safetensors "
-                "build of this checkpoint, or a diffusers repo.")
-        bad = _safetensors_unsupported(ZIMAGE_TRANSFORMER)
-        if bad:
+        bad = None if ZIMAGE_TRANSFORMER.lower().endswith(".gguf") \
+            else _safetensors_unsupported(ZIMAGE_TRANSFORMER)
+        if bad:  # LoRA egaree / SVDQuant; un .gguf est valide par son arch
             raise UnsupportedFeature(
                 f"{os.path.basename(ZIMAGE_TRANSFORMER)}: {bad}.")
         # Conversion (cache disque) -> chargement diffusers NORMAL derriere:
