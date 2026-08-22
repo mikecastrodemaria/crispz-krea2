@@ -173,6 +173,12 @@
         "_cache_dir_help": "Where thumbnails are cached. Empty (default) = <app>/cache (the app folder, gitignored - usually a fast disk, much faster than an HDD/NAS output folder). 'output' = next to the images (<out>/_index/thumbs, relative URLs). Any path = custom cache (e.g. an SSD): thumbnails go to <cache_dir>/crispz-thumbs/<slug>/. Also settable in the UI (Save > Asset Browser). Safe to delete at any time (rebuilt on demand)."
     },
     "log_level": "info",
+    "convert_cache": "auto",
+    "_convert_cache_help": "Where Civitai single-file checkpoints (.safetensors, bf16 or ComfyUI FP8/INT8 'scaled' incl. ConvRot) are converted to the diffusers layout Krea 2 requires (diffusers has no from_single_file for this architecture - the key mapping is ours). 'auto' (default) = <app>/cache/krea2_convert, any path = custom folder (needs ~26 GB free per checkpoint), 'off' = refuse single-file loading. First selection converts (minutes), next loads are normal. Safe to delete anytime (reconverted on demand).",
+    "convert_cache_max_gb": 80,
+    "_convert_cache_max_gb_help": "Size cap of the convert cache in GB (each entry is ~26 GB); least-recently-used conversions are evicted past it. 0 = unlimited.",
+    "convert_device": "auto",
+    "_convert_device_help": "Where the one-time dequantization math of FP8/INT8 checkpoints runs during conversion. 'auto' (default) = GPU if available (tensor-by-tensor, ~1 GB VRAM peak - the CPU path measured ~9 min on a 12.9B INT8, memory-bandwidth-bound), 'cpu' = never touch the GPU (pick this if you convert while rendering elsewhere).",
     "quantization": "float8_weight_only",
     "_quantization_help": "torchao scheme applied to the transformer at load. Krea 2 is 12.9B: raw bf16 needs ~26 GB and overflows a 32 GB card (measured 35.6 GB peak, 59 s/step). float8_weight_only -> 22.8 GB, ~2.4 s/step, visually identical (weights only, activations stay bf16). Options: float8_weight_only | int8_weight_only | int4_weight_only | float8_dynamic | none (needs >32 GB VRAM).",
     "_default_cpu_offload_help": "Krea 2 transformer (13 GB quantized) + Qwen3-VL text encoder (8.9 GB) do not both fit alongside activations on 32 GB -> 'model' keeps the encoder on CPU between generations. Measured 22.8 GB peak with float8_weight_only.",

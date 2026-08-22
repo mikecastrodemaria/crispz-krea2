@@ -3,6 +3,43 @@
 All notable changes to crispz-studio. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — Civitai single-file checkpoints load at last: our own Comfy→diffusers conversion
+
+diffusers has no `from_single_file` for `Krea2Transformer2DModel` — so we wrote
+the key mapping ourselves. The Comfy/Civitai single-file layout mirrors the
+diffusers model 1:1 (430 keys both sides, verified on the official Comfy
+re-export): pure renames (`blocks.N` → `transformer_blocks.N`, `txtfusion` →
+`text_fusion`, `attn.wq` → `attn.to_q`…) plus one reshape (`mod.lin` flat →
+`scale_shift_table (6, dim)`).
+
+- First selection converts the file ONCE to a diffusers folder in
+  `cache/krea2_convert/` (config `convert_cache`, LRU cap
+  `convert_cache_max_gb`, ~26 GB per entry), then every load goes through the
+  UNCHANGED `from_pretrained` + torchao path. AIO bundles are filtered to the
+  transformer; a non-Krea2 file (FLUX, Z-Image…) is refused with a clear
+  message, as are conversion mismatches (unknown/missing keys, bad shapes).
+- ComfyUI **FP8/INT8 "scaled"** variants (incl. **ConvRot** int8_tensorwise,
+  grouped-Hadamard un-rotation) are dequantized to bf16 during conversion —
+  the same circuit crispz-studio validated on Z-Image.
+- `list_checkpoints()` now lists convertible `.safetensors`; still skipped
+  with the reason logged: `.gguf` (no reader for this architecture yet),
+  stray LoRA files, SVDQuant/Nunchaku INT4.
+- Validated on GPU with an A/B/C protocol: the converted OFFICIAL Comfy
+  re-export renders IDENTICALLY to the official repo (pixel corr 1.0000 at the
+  same seed - the key mapping is proven), and a real Civitai INT8 fine-tune
+  (StableYogi) renders a coherent image (corr 0.76 to base).
+- That validation caught a second declaration style: comfy-quants can put the
+  int8_tensorwise/ConvRot config CENTRALLY in __metadata__._quantization_metadata
+  instead of per-tensor blobs - ignoring it dequantized StableYogi to pure
+  noise. Both styles are now read (fix also ported to crispz-studio).
+- The one-time dequant math runs on the GPU when available (convert_device:
+  auto | cpu; ~1 GB VRAM peak, tensor by tensor): the CPU path measured ~9 min
+  on a 12.9B INT8 (memory-bandwidth-bound), GPU cuts conversion to roughly the
+  disk-read time.
+- Tests: tests/test_convert.py (10 cases — every rename rule, FP8 descale,
+  ConvRot round-trip corr > 0.99, AIO prefix, foreign-architecture refusal,
+  missing-key reporting, cache off).
+
 ## Unreleased — queue: persistence + soft ⏸ Pause (ported from crispz-studio)
 
 The job queue now SURVIVES a restart or crash: saved to cache/queue.json after

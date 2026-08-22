@@ -14,9 +14,10 @@ Ces capacites sont declarees dans CAPABILITIES ci-dessous ; cz_ui s'en sert pour
 les onglets/controles correspondants, et get_pipe() leve UnsupportedFeature en filet de
 securite (CLI, API, appels directs).
 
-CHARGEMENT: uniquement from_pretrained sur un repo diffusers. Krea2Transformer2DModel
-n'herite PAS de FromOriginalModelMixin -> pas de from_single_file, donc les .safetensors
-Civitai (fp8 comme bf16) et les GGUF communautaires sont INCHARGEABLES. Voir README.
+CHARGEMENT: from_pretrained sur un repo/dossier diffusers. Krea2Transformer2DModel
+n'a pas de from_single_file upstream -> les .safetensors Civitai (bf16 et FP8/INT8
+'scaled', ConvRot compris) passent par NOTRE conversion en dossier diffusers, en
+cache disque (cf. _converted_folder). Les GGUF restent inchargeables. Voir README.
 Le bf16 seul deborde une carte 32 Go (35,6 Go au pic, ~59 s/step) -> on quantifie a la
 volee via torchao (fp8 weight-only): 22,8 Go, ~2,4 s/step, qualite equivalente.
 
@@ -615,16 +616,12 @@ def _safetensors_unsupported(path):
         # 404 'stable-diffusion-v1-5 does not appear to have a file named config.json'.
         if lora_keys >= 4:
             return "LoRA file, not a checkpoint - move it to the LoRA folder and pick it in Models > LoRA"
-        if has_fp8:
-            return "FP8"
         # '*.qweight' = poids pre-quantifies (SVDQuant/Nunchaku, GPTQ-like). Signal net:
-        # un checkpoint BF16/FP16 normal n'a jamais de 'qweight'.
+        # un checkpoint BF16/FP16 normal n'a jamais de 'qweight'. Pas dequantifiable
+        # par notre circuit (schema INT4 a groupes), contrairement aux FP8/INT8
+        # 'scaled' ComfyUI qui, EUX, passent par la conversion (_converted_folder).
         if has_qweight:
             return "SVDQuant/Nunchaku INT4"
-        # Les dtypes entiers bas seuls ne suffisent pas (evite les faux positifs sur un
-        # buffer U8 isole): on exige les facteurs de dequantification 'weight_scale'.
-        if has_int and has_scale:
-            return "INT8/INT4 quantized"
     except Exception:
         pass
     return None
@@ -701,15 +698,16 @@ def _checkpoint_dirs():
 def list_checkpoints():
     """Dossiers diffusers locaux utilisables comme modele de base Krea 2.
 
-    Contrairement aux autres forks crispz, AUCUN fichier single-file n'est propose:
-    Krea2Transformer2DModel n'a pas de from_single_file, donc un .safetensors (Civitai
-    fp8 ou bf16) et un .gguf sont inchargeables quoi qu'il arrive. Les lister ne ferait
-    que produire un echec au chargement apres selection.
+    Les .safetensors single-file (Civitai bf16 et FP8/INT8 'scaled') sont
+    proposes: ils passent par la CONVERSION en dossier diffusers au premier
+    chargement (cache disque, cf. _converted_folder). Restent ecartes: les .gguf
+    (pas de lecteur pour cette architecture), les LoRA egarees et les SVDQuant
+    (schema INT4 non dequantifiable), avec la raison en console.
 
     Un dossier n'est retenu que s'il contient un model_index.json (layout diffusers).
     Les repos HF officiels sont ajoutes par l'UI (ZIMAGE_BASE_REPOS), pas ici."""
     out, seen = [], set()
-    skipped = 0
+    n_gguf = 0
     for d in _checkpoint_dirs():
         if not os.path.isdir(d):
             continue
@@ -719,12 +717,18 @@ def list_checkpoints():
                 if f not in seen and os.path.isfile(os.path.join(p, "model_index.json")):
                     seen.add(f)
                     out.append(f)
-            elif f.lower().endswith((".safetensors", ".ckpt", ".pt", ".sft", ".gguf")):
-                skipped += 1
-    if skipped:
-        _log(f"{skipped} single-file checkpoint(s) skipped: Krea 2 has no "
-             "from_single_file in diffusers (neither Civitai .safetensors nor .gguf). "
-             "Use a diffusers repo or folder.")
+            elif f.lower().endswith(".safetensors"):
+                bad = _safetensors_unsupported(p)
+                if bad:
+                    _log(f"skipped {f}: {bad}")
+                elif f not in seen:
+                    seen.add(f)
+                    out.append(f)
+            elif f.lower().endswith(".gguf"):
+                n_gguf += 1
+    if n_gguf:
+        _log(f"{n_gguf} GGUF file(s) skipped: no GGUF reader for the Krea 2 "
+             "architecture yet - use a .safetensors build (converted on first load).")
     return sorted(out)
 
 
@@ -971,24 +975,364 @@ def _effective_offload(tpath=None):
     return off
 
 
+# ----------------------------------------------------------------------------
+# Conversion single-file (Comfy/Civitai) -> dossier diffusers, en cache disque.
+#
+# Krea2Transformer2DModel n'a pas de from_single_file dans diffusers: la table
+# de correspondance de cles n'existe pas upstream. On l'implemente ICI: le
+# checkpoint Comfy est un miroir 1:1 du modele diffusers (430 cles des deux
+# cotes, verifie sur le re-export officiel) - pur renommage, plus UN reshape
+# (mod.lin (36864,) -> scale_shift_table (6, 6144)). Les variantes FP8/INT8
+# 'scaled' ComfyUI (y compris ConvRot) sont dequantifiees en bf16 pendant la
+# conversion (meme circuit que crispz-studio, valide sur Z-Image).
+#
+# Le resultat est ecrit UNE FOIS en dossier diffusers (cache/krea2_convert/...)
+# puis recharge par le chemin from_pretrained EXISTANT (quantification torchao
+# comprise): premiere selection = conversion (minutes, ~26 Go ecrits), les
+# suivantes = chargement normal.
+# ----------------------------------------------------------------------------
+import re as _re
+import hashlib as _hashlib
+
+_KREA2_LEAF_MAP = {
+    "attn.wq.weight": "attn.to_q.weight",
+    "attn.wk.weight": "attn.to_k.weight",
+    "attn.wv.weight": "attn.to_v.weight",
+    "attn.wo.weight": "attn.to_out.0.weight",
+    "attn.gate.weight": "attn.to_gate.weight",
+    "attn.qknorm.qnorm.scale": "attn.norm_q.weight",
+    "attn.qknorm.knorm.scale": "attn.norm_k.weight",
+    "mlp.down.weight": "ff.down.weight",
+    "mlp.gate.weight": "ff.gate.weight",
+    "mlp.up.weight": "ff.up.weight",
+    "prenorm.scale": "norm1.weight",
+    "postnorm.scale": "norm2.weight",
+}
+_KREA2_TOP_MAP = {
+    "first.weight": "img_in.weight",
+    "first.bias": "img_in.bias",
+    "tmlp.0.weight": "time_embed.linear_1.weight",
+    "tmlp.0.bias": "time_embed.linear_1.bias",
+    "tmlp.2.weight": "time_embed.linear_2.weight",
+    "tmlp.2.bias": "time_embed.linear_2.bias",
+    "tproj.1.weight": "time_mod_proj.weight",
+    "tproj.1.bias": "time_mod_proj.bias",
+    "txtmlp.0.scale": "txt_in.norm.weight",
+    "txtmlp.1.weight": "txt_in.linear_1.weight",
+    "txtmlp.1.bias": "txt_in.linear_1.bias",
+    "txtmlp.3.weight": "txt_in.linear_2.weight",
+    "txtmlp.3.bias": "txt_in.linear_2.bias",
+    "last.linear.weight": "final_layer.linear.weight",
+    "last.linear.bias": "final_layer.linear.bias",
+    "last.norm.scale": "final_layer.norm.weight",
+    "last.modulation.lin": "final_layer.scale_shift_table",
+    "txtfusion.projector.weight": "text_fusion.projector.weight",
+}
+
+
+def _krea2_rename(k):
+    """Nom Comfy -> (nom diffusers, reshape_rows|None). None si cle inconnue."""
+    if k in _KREA2_TOP_MAP:
+        return _KREA2_TOP_MAP[k], None
+    m = _re.match(r"^blocks\.(\d+)\.(.+)$", k)
+    if m:
+        if m.group(2) == "mod.lin":
+            # (6*dim,) -> (6, dim): la table de modulation est stockee a plat
+            return f"transformer_blocks.{m.group(1)}.scale_shift_table", 6
+        leaf = _KREA2_LEAF_MAP.get(m.group(2))
+        if leaf:
+            return f"transformer_blocks.{m.group(1)}.{leaf}", None
+        return None
+    m = _re.match(r"^txtfusion\.(layerwise|refiner)_blocks\.(\d+)\.(.+)$", k)
+    if m:
+        leaf = _KREA2_LEAF_MAP.get(m.group(3))
+        if leaf:
+            return f"text_fusion.{m.group(1)}_blocks.{m.group(2)}.{leaf}", None
+    return None
+
+
+def _hadamard_ortho(n):
+    """Matrice 'regular hadamard' du ConvRot comfy-quants -- ATTENTION, ce n'est
+    PAS la construction de Sylvester: base H4 precise, etendue par produits de
+    Kronecker jusqu'a n (puissance de 4), normalisee 1/sqrt(n). Orthonormee ET
+    symetrique -> la reconstruction re-multiplie par la meme matrice. (Porte de
+    crispz-studio, verifie contre comfy_quants/formats/convrot.py.)"""
+    h4 = torch.tensor([[1., 1., 1., -1.], [1., 1., -1., 1.],
+                       [1., -1., 1., 1.], [-1., 1., 1., 1.]])
+    H = h4
+    while H.shape[0] < n:
+        H = torch.kron(H, h4)
+    if H.shape[0] != n:
+        raise ValueError(f"convrot groupsize {n} is not a power of 4")
+    return H / (float(n) ** 0.5)
+
+
+def _read_comfy_state_dict(path):
+    """Lit un single-file Krea 2 (Comfy/Civitai) en RAM, dequantifie en DTYPE:
+      - bundle AIO: seules les cles 'model.diffusion_model.*' sont gardees;
+      - X.weight (F8/I8) * X.weight_scale / X.scale_weight -> bf16;
+      - blob X.comfy_quant declarant 'convrot' -> rotation Hadamard DEFAITE
+        apres descale (sinon les poids sont un bruit total);
+      - cles de quantification consommees/jetees.
+    Lecture SEQUENTIELLE en ordre physique (data_offsets): un HDD s'effondre en
+    acces aleatoire (mesure crispz-studio: 349 s -> debit disque)."""
+    from safetensors import safe_open
+    t0 = time.time()
+    import struct
+    with open(path, "rb") as f:
+        n = struct.unpack("<Q", f.read(8))[0]
+        hdr = json.loads(f.read(n).decode("utf-8", "ignore"))
+    entries = [(k, v) for k, v in hdr.items()
+               if k != "__metadata__" and isinstance(v, dict)]
+    prefix = ""
+    if any(k.startswith("model.diffusion_model.") for k, _ in entries):
+        prefix = "model.diffusion_model."
+        entries = [(k, v) for k, v in entries if k.startswith(prefix)]
+    # Garde d'architecture: sans marqueur Krea 2, refus clair (un checkpoint
+    # FLUX/Z-Image egare chargerait du bruit).
+    if not any(k[len(prefix):].startswith(("txtfusion.", "blocks.0.attn.wq"))
+               for k, _ in entries):
+        raise RuntimeError(
+            f"{os.path.basename(path)}: not a Krea 2 checkpoint (no txtfusion/"
+            f"blocks markers) - this build only converts Krea 2 single files.")
+    entries.sort(key=lambda kv: kv[1].get("data_offsets", [0])[0])
+    raw, qcfg = {}, {}
+    # comfy-quants declare le schema soit en blobs PAR TENSEUR (X.comfy_quant),
+    # soit CENTRALEMENT dans __metadata__._quantization_metadata (StableYogi
+    # INT8: {"layers": {"blocks.0.attn.gate": {"format": "int8_tensorwise",
+    # "convrot": true, "convrot_groupsize": 256}}}). Ignorer cette variante
+    # rend les poids en BRUIT TOTAL (rotation jamais defaite) - observe sur
+    # realismByStableYogi_v25INT8Turbo. Les blobs par tenseur gagnent (ecrits
+    # apres, ils ecrasent l'entree metadata du meme layer).
+    try:
+        qm = json.loads((hdr.get("__metadata__") or {}).get(
+            "_quantization_metadata") or "{}")
+        for lk, lv in (qm.get("layers") or {}).items():
+            if isinstance(lv, dict):
+                qcfg[lk[len(prefix):] if prefix and lk.startswith(prefix) else lk] = lv
+        if qcfg:
+            _dbg(f"quantization metadata: {len(qcfg)} layer(s) declared in header")
+    except Exception as e:
+        _dbg(f"_quantization_metadata unreadable: {e}")
+    with safe_open(path, framework="pt", device="cpu") as f:
+        for k, _ in entries:
+            kk = k[len(prefix):]
+            if kk.endswith(".comfy_quant"):
+                try:
+                    qcfg[kk[:-len(".comfy_quant")]] = json.loads(
+                        bytes(f.get_tensor(k).tolist()).decode("utf-8"))
+                except Exception as e:
+                    _dbg(f"comfy_quant blob unreadable {k}: {e}")
+                continue
+            raw[kk] = f.get_tensor(k)
+    # Le calcul de dequantification (cast fp32 + scales + un-rotation) est
+    # limite par la bande passante memoire en CPU (~9 min mesurees sur un INT8
+    # 12.9B): on le fait sur le GPU quand il est disponible, tenseur par
+    # tenseur (~400 Mo max en VRAM), retour bf16 en RAM. convert_device: auto
+    # (defaut, cuda si present) | cpu.
+    dev = "cpu"
+    try:
+        if (torch.cuda.is_available()
+                and str(CONFIG.get("convert_device", "auto")).lower() != "cpu"):
+            dev = "cuda"
+    except Exception:
+        pass
+    _had, sd = {}, {}
+    n_dq = n_rot = 0
+    for k in list(raw.keys()):
+        if (k.endswith((".weight_scale", ".scale_weight", ".scale_input",
+                        ".input_scale")) or k.endswith("scaled_fp8")):
+            continue
+        t = raw.pop(k)
+        if t.dtype in (torch.float8_e4m3fn, torch.float8_e5m2,
+                       torch.int8, torch.uint8):
+            s = None
+            for cand in (k + "_scale",
+                         (k[:-len(".weight")] + ".scale_weight")
+                         if k.endswith(".weight") else None):
+                if cand and cand in raw:
+                    s = raw[cand]
+                    break
+            t = t.to(dev).to(torch.float32)
+            if s is not None:
+                t = t * s.to(dev).to(torch.float32)
+            cfg = qcfg.get(k[:-len(".weight")]) if k.endswith(".weight") else None
+            if cfg and cfg.get("convrot"):
+                g = int(cfg.get("convrot_groupsize", 256) or 256)
+                if t.dim() == 2 and g > 1 and t.shape[1] % g == 0:
+                    if g not in _had:
+                        _had[g] = _hadamard_ortho(g).to(dev)
+                    t = (t.view(t.shape[0], -1, g) @ _had[g]).reshape(t.shape[0], -1)
+                    n_rot += 1
+            t = t.to(DTYPE).cpu()
+            n_dq += 1
+        elif t.is_floating_point() and t.dtype != DTYPE:
+            t = t.to(DTYPE)
+        sd[k] = t
+    raw.clear()
+    if dev != "cpu":
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+    if n_dq:
+        _log(f"dequantized {n_dq} tensors"
+             + (f", {n_rot} un-rotated (ConvRot)" if n_rot else "")
+             + (f" on {dev}" if n_dq else "")
+             + f" in {time.time() - t0:.1f}s")
+    return sd
+
+
+def _expected_transformer_keys():
+    """(config_dict, {cle: shape}) du transformer du repo de base, SANS charger
+    les poids (init_empty_weights). Le config.json vient du cache HF local du
+    repo de base -> il faut avoir charge le modele officiel au moins une fois."""
+    from accelerate import init_empty_weights
+    from diffusers import Krea2Transformer2DModel
+    from huggingface_hub import hf_hub_download
+    try:
+        cfg_path = hf_hub_download(BASE_REPO, "transformer/config.json")
+    except Exception as e:
+        raise RuntimeError(
+            f"cannot fetch transformer/config.json from {BASE_REPO} ({e}). "
+            "Load the official base model once (network) before converting "
+            "single-file checkpoints.") from e
+    with open(cfg_path, "r", encoding="utf-8") as f:
+        conf = json.load(f)
+    with init_empty_weights():
+        m = Krea2Transformer2DModel.from_config(conf)
+    return conf, {k: tuple(v.shape) for k, v in m.state_dict().items()}
+
+
+def _convert_cache_dir():
+    """Dossier du cache de conversion. Config convert_cache: 'auto' (defaut) =
+    <app>/cache/krea2_convert, chemin = dossier custom, 'off' = pas de cache
+    (conversion refusee: 26 Go par entree, un tmp jetable n'a pas de sens)."""
+    mode = str(CONFIG.get("convert_cache", "auto") or "auto")
+    if mode.lower() == "off":
+        return None
+    if mode.lower() == "auto":
+        return os.path.join(cz_core.HERE, "cache", "krea2_convert")
+    return mode
+
+
+def _prune_convert_cache(keep):
+    """Evince les conversions les moins recemment utilisees au-dela de
+    convert_cache_max_gb (0 = illimite). `keep` = dossier a ne jamais evincer."""
+    root = _convert_cache_dir()
+    cap = float(CONFIG.get("convert_cache_max_gb", 80) or 0)
+    if not root or not os.path.isdir(root) or cap <= 0:
+        return
+    entries = []
+    for d in os.listdir(root):
+        p = os.path.join(root, d)
+        if not os.path.isdir(p) or os.path.abspath(p) == os.path.abspath(keep):
+            continue
+        size = sum(os.path.getsize(os.path.join(r, f))
+                   for r, _, fs in os.walk(p) for f in fs)
+        entries.append((os.path.getmtime(p), p, size))
+    total = sum(s for _, _, s in entries)
+    keep_size = sum(os.path.getsize(os.path.join(r, f))
+                    for r, _, fs in os.walk(keep) for f in fs) if os.path.isdir(keep) else 0
+    total += keep_size
+    for mt, p, s in sorted(entries):
+        if total <= cap * 1e9:
+            break
+        import shutil
+        shutil.rmtree(p, ignore_errors=True)
+        total -= s
+        _log(f"convert cache: evicted {os.path.basename(p)} ({s / 1e9:.1f} GB)")
+
+
+def _converted_folder(path):
+    """Dossier diffusers du single-file `path`: conversion a la premiere
+    demande (cache par (chemin, taille, mtime)), reutilisation ensuite."""
+    root = _convert_cache_dir()
+    if not root:
+        raise RuntimeError(
+            "convert_cache is 'off': converting a Krea 2 single file needs the "
+            "on-disk cache (~26 GB per checkpoint). Set convert_cache to 'auto' "
+            "or a folder path in config.txt.")
+    st = os.stat(path)
+    sig = f"{os.path.abspath(path)}|{st.st_size}|{int(st.st_mtime)}"
+    key = _hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16]
+    stem = _re.sub(r"[^A-Za-z0-9_-]+", "_", os.path.splitext(os.path.basename(path))[0])[:40]
+    dst = os.path.join(root, f"{stem}_{key}")
+    stamp = os.path.join(dst, "source.json")
+    weights = os.path.join(dst, "transformer", "diffusion_pytorch_model.safetensors")
+    if os.path.isfile(stamp) and os.path.isfile(weights):
+        try:
+            if json.load(open(stamp, "r", encoding="utf-8")).get("sig") == sig:
+                os.utime(dst, None)          # LRU
+                return dst
+        except Exception:
+            pass
+    _log(f"converting {os.path.basename(path)} to diffusers layout (first time "
+         "only: reads the full file, writes ~26 GB bf16 to the convert cache) ...")
+    t0 = time.time()
+    conf, expected = _expected_transformer_keys()
+    sd = _read_comfy_state_dict(path)
+    out, unknown = {}, []
+    for k, t in sd.items():
+        r = _krea2_rename(k)
+        if r is None:
+            unknown.append(k)
+            continue
+        name, rows = r
+        if rows is not None and t.dim() == 1 and t.numel() % rows == 0:
+            t = t.view(rows, -1)
+        out[name] = t
+    missing = [k for k in expected if k not in out]
+    bad = [f"{k} {tuple(out[k].shape)}!={expected[k]}"
+           for k in out if k in expected and tuple(out[k].shape) != expected[k]]
+    if unknown or missing or bad:
+        raise RuntimeError(
+            f"{os.path.basename(path)}: conversion mismatch - "
+            f"{len(unknown)} unknown key(s) {unknown[:3]}, "
+            f"{len(missing)} missing {missing[:3]}, "
+            f"{len(bad)} shape mismatch(es) {bad[:2]}. The file is probably not "
+            f"a standard Krea 2 export; please report it.")
+    os.makedirs(os.path.join(dst, "transformer"), exist_ok=True)
+    with open(os.path.join(dst, "transformer", "config.json"), "w",
+              encoding="utf-8") as f:
+        json.dump(conf, f, indent=2)
+    from safetensors.torch import save_file
+    tmp = weights + ".tmp"
+    save_file(out, tmp)
+    os.replace(tmp, weights)
+    with open(stamp, "w", encoding="utf-8") as f:
+        json.dump({"sig": sig, "source": os.path.basename(path)}, f)
+    _log(f"converted in {time.time() - t0:.1f}s -> {dst}")
+    _prune_convert_cache(dst)
+    return dst
+
+
 def _load_transformer():
     """Charge UNIQUEMENT le transformer courant (sans le reste du pipeline), depuis un repo
     diffusers, quantifie a la volee selon QUANT_MODE.
 
-    Pas de branche single-file/GGUF ici, contrairement aux autres forks crispz:
-    Krea2Transformer2DModel n'herite pas de FromOriginalModelMixin, donc from_single_file
-    n'existe pas. Un .safetensors Civitai ou un .gguf est refuse en amont par
-    list_checkpoints() / set_zimage_transformer().
+    Un single-file .safetensors (Civitai, bf16 ou FP8/INT8 'scaled') passe par la
+    CONVERSION en dossier diffusers (_converted_folder, cache disque) puis par ce
+    meme chemin from_pretrained. Seuls les .gguf restent refuses (pas encore de
+    lecteur GGUF pour cette architecture).
 
     Utilise au chargement complet ET pour l'echange a chaud (_swap_transformer)."""
     from diffusers import Krea2Transformer2DModel
     repo = ZIMAGE_TRANSFORMER or BASE_REPO
     if ZIMAGE_TRANSFORMER and _is_single_file(ZIMAGE_TRANSFORMER):
-        raise UnsupportedFeature(
-            f"Krea 2 cannot load a single file ({os.path.basename(ZIMAGE_TRANSFORMER)}). "
-            "diffusers does not expose from_single_file for this architecture: Civitai "
-            ".safetensors (fp8 and bf16 alike) and .gguf files are unloadable. Use a "
-            "diffusers repo instead (krea/Krea-2-Turbo or krea/Krea-2-Raw).")
+        if ZIMAGE_TRANSFORMER.lower().endswith(".gguf"):
+            raise UnsupportedFeature(
+                f"Krea 2 GGUF single files are not supported yet "
+                f"({os.path.basename(ZIMAGE_TRANSFORMER)}): the conversion path "
+                "covers .safetensors (bf16 and FP8/INT8 scaled). Use a .safetensors "
+                "build of this checkpoint, or a diffusers repo.")
+        bad = _safetensors_unsupported(ZIMAGE_TRANSFORMER)
+        if bad:
+            raise UnsupportedFeature(
+                f"{os.path.basename(ZIMAGE_TRANSFORMER)}: {bad}.")
+        # Conversion (cache disque) -> chargement diffusers NORMAL derriere:
+        # meme from_pretrained, meme quantification torchao que le repo de base.
+        repo = _converted_folder(ZIMAGE_TRANSFORMER)
     qc = _quant_config()
     kw = {"subfolder": "transformer", "torch_dtype": DTYPE}
     if qc is not None:
