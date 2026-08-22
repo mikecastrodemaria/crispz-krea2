@@ -36,7 +36,15 @@ re-export): pure renames (`blocks.N` → `transformer_blocks.N`, `txtfusion` →
   auto | cpu; ~1 GB VRAM peak, tensor by tensor): the CPU path measured ~9 min
   on a 12.9B INT8 (memory-bandwidth-bound), GPU cuts conversion to roughly the
   disk-read time.
-- Tests: tests/test_convert.py (10 cases — every rename rule, FP8 descale,
+- **GGUF too**: ComfyUI-GGUF exports (arch 'krea2') go through the same
+  conversion - the gguf lib dequantizes Q8_0/Q6_K/... to bf16 (tensor names
+  are identical to the Comfy safetensors layout, orientation verified), then
+  the same rename + folder cache applies. Validated: the official Turbo Q8_0
+  renders at pixel corr 0.959 to the official repo (pure quantization noise),
+  the redcraft RedMix fine-tune renders coherent (corr 0.76). NB: unlike
+  crispz-studio, a GGUF cannot stay quantized in VRAM here (no
+  from_single_file) - it only saves download size, runtime quant is torchao.
+- Tests: tests/test_convert.py (12 cases — every rename rule, FP8 descale,
   ConvRot round-trip corr > 0.99, AIO prefix, foreign-architecture refusal,
   missing-key reporting, cache off).
 
