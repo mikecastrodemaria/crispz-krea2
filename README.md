@@ -52,9 +52,13 @@ SwarmUI. On top of crispz's upscaler it adds:
   (Turbo / Z-Image) with single-file `.safetensors` from a main **and** an optional
   extra folder, a **Transformer override** (diffusers repo/folder, e.g. Juggernaut-Z),
   and **multi-LoRA** (configurable **1–10 slots** + trigger words). Picking a model also
-  auto-syncs the Performance preset. NB Krea 2: `Krea2Transformer2DModel` has **no
-  single-file loader** — Civitai `.safetensors` / GGUF / FP8 checkpoints cannot be
-  loaded at all (clear message at selection); only HF/diffusers repos work.
+  auto-syncs the Performance preset. NB Krea 2: diffusers has no `from_single_file`
+  for `Krea2Transformer2DModel`, so Civitai `.safetensors` load through **our own
+  conversion** — the checkpoint (bf16 **or** ComfyUI FP8/INT8 "scaled", ConvRot
+  included, dequantized to bf16) is converted ONCE to a diffusers folder in
+  `cache/krea2_convert/` (config `convert_cache*`, ~26 GB per entry, LRU-pruned),
+  then loads through the normal quantized path. First selection converts
+  (minutes); next loads are normal. GGUF and SVDQuant/NVFP4 remain unsupported.
 - **Force aspect ratio on Upscale/img2img** (Settings > Aspect ratio): radio
   **Off** / **Crop to fit** (centre-crop, Fooocus-style). The family's **Extend
   (outpaint)** mode is hidden here: Krea 2 has no inpaint pipeline.
@@ -416,10 +420,10 @@ python app.py --txt2img --prompt "..." \
 python app.py --zimage-transformer "D:/models/zimage_civitai.safetensors" ...
 ```
 
-NB Krea 2: **single-file checkpoints are not supported at all** on this fork
-(`Krea2Transformer2DModel` has no `from_single_file`) — the flags above only accept
-HF/diffusers repos or folders; a `.safetensors`/`.gguf` path is refused with a clear
-message.
+NB Krea 2: a Civitai `.safetensors` given to the flags above is **converted on
+first load** to a diffusers folder (`cache/krea2_convert/`, see `convert_cache*`
+in config) — bf16 and ComfyUI FP8/INT8 "scaled" (ConvRot included) both work;
+`.gguf` and SVDQuant files are refused with a clear message.
 
 ### Turbo vs Base (`--guidance`)
 
@@ -515,9 +519,11 @@ Juggernaut-Z is a **Z-Image Base** fine-tune → set **Performance = "Base CFG"*
 
 **Gotchas**
 
-- **No single-file checkpoint loads on Krea 2** (no `from_single_file` on its
-  transformer class): Civitai `.safetensors`, GGUF, FP8… are all refused with a clear
-  message. Use HF/diffusers repos; LoRAs work normally.
+- **Single-file checkpoints convert on first load** (diffusers has no
+  `from_single_file` for Krea 2 — the key mapping is ours): expect minutes and
+  ~26 GB written to `cache/krea2_convert/` the FIRST time a Civitai checkpoint
+  is selected, instant loads after. GGUF and SVDQuant files stay refused. The
+  official base model must have been loaded once (its config seeds conversion).
 - If the checkpoint is a **Z-Image Base** model (not Turbo), set **Performance →
   "Base CFG (28 steps)"** (guidance ~4, more steps), otherwise the result is flat.
 - Verify what loaded with `run.bat --debug`:
