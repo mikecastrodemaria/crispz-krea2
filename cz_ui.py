@@ -108,26 +108,47 @@ PRESET_FLAGMAP = {
     "cpu_offload": "--cpu-offload",
 }
 
-# Ratios d'aspect facon Fooocus. label -> (width, height) en multiples de 16.
+# Ratios d'aspect facon Fooocus, PLAFONNES a ~1.05 Mpx: le transformer 12.9B
+# quantifie + ses activations saturent une carte 32 Go des ~1.3 Mpx (mesure
+# 2026-08-23: 32.1/32.6 Go soutenus a 1024x1536 -> la moindre allocation tierce
+# bascule en RAM partagee et les rendus passent de ~2 min a 4-5 min, sans
+# erreur). Les ratios restent servis; la taille finale se gagne a l'upscale
+# ESRGAN. label -> (width, height) en multiples de 16.
 ASPECT_RATIOS = {
     "1024 x 1024  (1:1)":  (1024, 1024),
-    "1280 x 1024  (5:4)":  (1280, 1024),
-    "1024 x 1280  (4:5)":  (1024, 1280),
+    "1120 x 896  (5:4)":   (1120, 896),
+    "896 x 1120  (4:5)":   (896, 1120),
     "1152 x 896  (9:7)":   (1152, 896),
     "896 x 1152  (7:9)":   (896, 1152),
-    "1280 x 960  (4:3)":   (1280, 960),
-    "960 x 1280  (3:4)":   (960, 1280),
+    "1152 x 864  (4:3)":   (1152, 864),
+    "864 x 1152  (3:4)":   (864, 1152),
     "1216 x 832  (3:2)":   (1216, 832),
     "832 x 1216  (2:3)":   (832, 1216),
-    "1536 x 1024  (3:2)":  (1536, 1024),
-    "1024 x 1536  (2:3)":  (1024, 1536),
+    "1248 x 832  (3:2)":   (1248, 832),
+    "832 x 1248  (2:3)":   (832, 1248),
     "1344 x 768  (16:9)":  (1344, 768),
     "768 x 1344  (9:16)":  (768, 1344),
-    "1536 x 864  (16:9)":  (1536, 864),
-    "864 x 1536  (9:16)":  (864, 1536),
     "1536 x 640  (21:9)":  (1536, 640),
     "640 x 1536  (9:21)":  (640, 1536),
 }
+
+# Anciens libelles (>1.2 Mpx, retires du dropdown) -> equivalent au meme ratio.
+# Les presets et preferences sauvegardes avant le plafonnement restent valides.
+_LEGACY_ASPECTS = {
+    "1280 x 1024  (5:4)": "1120 x 896  (5:4)",
+    "1024 x 1280  (4:5)": "896 x 1120  (4:5)",
+    "1280 x 960  (4:3)":  "1152 x 864  (4:3)",
+    "960 x 1280  (3:4)":  "864 x 1152  (3:4)",
+    "1536 x 1024  (3:2)": "1248 x 832  (3:2)",
+    "1024 x 1536  (2:3)": "832 x 1248  (2:3)",
+    "1536 x 864  (16:9)": "1344 x 768  (16:9)",
+    "864 x 1536  (9:16)": "768 x 1344  (9:16)",
+}
+
+
+def _aspect_resolve(name):
+    """Libelle courant OU ancien (pre-plafonnement) -> libelle courant."""
+    return _LEGACY_ASPECTS.get(str(name or ""), name)
 # Liste triee du plus carre au plus large, chaque format suivi de son pendant portrait.
 # Les entrees en 1536 (3:2, 16:9) et les 5:4 / 4:3 sont des ratios EXACTS, ceux qu'on lit
 # sur les recettes CivitAI/ComfyUI -- contrairement aux 832x1216 / 768x1344 / 1536x640
@@ -921,8 +942,9 @@ def _apply_preset(name):
 
 
 def _set_aspect(name):
-    """UI: applique un ratio d'aspect -> (width, height)."""
-    w, h = ASPECT_RATIOS.get(name, (1024, 1024))
+    """UI: applique un ratio d'aspect -> (width, height). Les anciens libelles
+    (presets d'avant le plafonnement VRAM) sont resolus vers l'equivalent."""
+    w, h = ASPECT_RATIOS.get(_aspect_resolve(name), (1024, 1024))
     return w, h
 
 
@@ -932,7 +954,7 @@ def _ui_set_force_ratio(mode, aspect_name):
     'Extend (outpaint)' -> etend l'image au ratio (absent sur Krea 2: pas d'inpaint).
     Pose l'etat dans cz_pipeline."""
     m = str(mode or "Off").strip().lower()
-    set_force_ratio("" if m.startswith("off") else aspect_name)
+    set_force_ratio("" if m.startswith("off") else _aspect_resolve(aspect_name))
     cz_pipeline.set_force_ratio_mode("extend" if m.startswith("extend") else "crop")
 
 
@@ -3312,7 +3334,8 @@ def build_ui():
                                                info="Sets steps + guidance (Lightning also applies its LoRA). "
                                                     "CFG presets = for the Raw (non-distilled) variant.")
                         aspect = gr.Dropdown(list(ASPECT_RATIOS),
-                                             value=CONFIG.get("default_aspect_ratio", "1024 x 1024  (1:1)"),
+                                             value=_aspect_resolve(CONFIG.get(
+                                                 "default_aspect_ratio", "1024 x 1024  (1:1)")),
                                              label="Aspect ratio")
                         # Extend (outpaint) exige le pipeline inpaint -> absent sur Krea 2:
                         # le radio ne propose que Off/Crop (meme UX que la famille sinon).
