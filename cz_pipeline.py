@@ -1360,15 +1360,13 @@ def _load_transformer():
     Utilise au chargement complet ET pour l'echange a chaud (_swap_transformer)."""
     from diffusers import Krea2Transformer2DModel
     repo = ZIMAGE_TRANSFORMER or BASE_REPO
-    if ZIMAGE_TRANSFORMER and _is_single_file(ZIMAGE_TRANSFORMER):
+    single = bool(ZIMAGE_TRANSFORMER and _is_single_file(ZIMAGE_TRANSFORMER))
+    if single:
         bad = None if ZIMAGE_TRANSFORMER.lower().endswith(".gguf") \
             else _safetensors_unsupported(ZIMAGE_TRANSFORMER)
         if bad:  # LoRA egaree / SVDQuant; un .gguf est valide par son arch
             raise UnsupportedFeature(
                 f"{os.path.basename(ZIMAGE_TRANSFORMER)}: {bad}.")
-        # Conversion (cache disque) -> chargement diffusers NORMAL derriere:
-        # meme from_pretrained, meme quantification torchao que le repo de base.
-        repo = _converted_folder(ZIMAGE_TRANSFORMER)
     qc = _quant_config()
     kw = {"subfolder": "transformer", "torch_dtype": DTYPE}
     if qc is not None:
@@ -1378,15 +1376,22 @@ def _load_transformer():
     else:
         _log(f"loading Krea 2 transformer (bf16, not quantized): {repo} ... "
              "[WARN] ~26 GB: overflows a 32 GB card, expect ~59 s/step")
-    label = f"transformer {repo.split('/')[-1]}" + (f" ({QUANT_MODE})" if qc is not None else " (bf16)")
+    label = (f"transformer {os.path.basename(str(repo).rstrip('/'))}"
+             + (f" ({QUANT_MODE})" if qc is not None else " (bf16)"))
+
+    def _repo_loader():
+        # La conversion (couteuse) n'est declenchee QU'ICI, donc uniquement sur
+        # un vrai MISS du cache de quantification.
+        return _converted_folder(ZIMAGE_TRANSFORMER) if single else repo
     if qc is not None and _quant_cache_dir():
         try:
-            return _load_transformer_quant_cached(repo, kw, label)
+            return _load_transformer_quant_cached(
+                ZIMAGE_TRANSFORMER if single else repo, _repo_loader, kw, label)
         except Exception as e:
             _log(f"quant cache path failed ({e}); falling back to direct load")
     return _load_monitor(
         label,
-        lambda: Krea2Transformer2DModel.from_pretrained(repo, **kw))
+        lambda: Krea2Transformer2DModel.from_pretrained(_repo_loader(), **kw))
 
 
 # ----------------------------------------------------------------------------
@@ -1434,53 +1439,125 @@ def _prune_quant_cache(keep):
         _log(f"quant cache: evicted {os.path.basename(pth)} ({sz / 1e9:.1f} GB)")
 
 
-def _repo_sig(repo):
-    """Identite stable de la SOURCE du transformer: dossier local -> chemin +
-    taille + mtime des poids (une reconversion invalide donc la forme
-    quantifiee); repo HF -> son identifiant."""
+def _repo_sig(src):
+    """Identite stable de la SOURCE du transformer, dans l'ordre:
+    FICHIER single-file original -> chemin + taille + mtime DU FICHIER (la cle
+    survit ainsi a la suppression du cache de conversion - lecon apprise: la
+    cle historique pointait le dossier converti, et purger krea2_convert
+    invalidait toutes les formes quantifiees); dossier diffusers -> ses poids;
+    repo HF -> son identifiant."""
     try:
-        w = os.path.join(str(repo), "transformer",
+        if os.path.isfile(str(src)):
+            st = os.stat(src)
+            return f"{os.path.abspath(src)}|{st.st_size}|{int(st.st_mtime)}"
+        w = os.path.join(str(src), "transformer",
                          "diffusion_pytorch_model.safetensors")
         if os.path.isfile(w):
             st = os.stat(w)
-            return f"{os.path.abspath(repo)}|{st.st_size}|{int(st.st_mtime)}"
+            return f"{os.path.abspath(src)}|{st.st_size}|{int(st.st_mtime)}"
     except Exception:
         pass
-    return str(repo)
+    return str(src)
 
 
-def _load_transformer_quant_cached(repo, kw, label):
+def _quant_entry_complete(d):
+    """Une entree du quant-cache est utilisable: config + au moins un shard."""
+    if not os.path.isfile(os.path.join(d, "config.json")):
+        return False
+    try:
+        return any(f.startswith("diffusion_pytorch_model") and f.endswith(".bin")
+                   for f in os.listdir(d))
+    except OSError:
+        return False
+
+
+def _load_transformer_quant_cached(sig_source, repo_loader, kw, label):
     """Charge le transformer via le cache de quantification.
 
-    HIT: from_pretrained direct de la forme torchao picklee (use_safetensors=
-    False) - pas de dequant, pas de quantize, lecture ~13 Go au lieu de ~26.
-    MISS: chargement normal (bf16 + quantize torchao) PUIS save_pretrained
-    (safe_serialization=False) pour toutes les fois suivantes. Un echec de
-    serialisation est non-fatal (le modele charge est rendu tel quel)."""
+    sig_source = le FICHIER original (single-file) ou l'id de repo: la cle ne
+    depend PAS du cache de conversion. repo_loader = callable -> dossier/repo a
+    charger en cas de MISS (c'est LUI qui declenche l'eventuelle conversion:
+    sur un HIT, aucune conversion n'a lieu, meme si krea2_convert a ete purge).
+
+    HIT: from_pretrained direct de la forme torchao picklee (~13 Go, ~4 s).
+    MISS: repo_loader() -> chargement normal (bf16 + quantize) PUIS
+    save_pretrained pour toutes les fois suivantes (echec non-fatal).
+    Les entrees a CLE HISTORIQUE (dossier converti) sont migrees par stem:
+    renommees et re-stampees, pas resérialisees."""
     from diffusers import Krea2Transformer2DModel
     root = _quant_cache_dir()
-    sig = f"{_repo_sig(repo)}|{QUANT_MODE}"
+    sig = f"{_repo_sig(sig_source)}|{QUANT_MODE}"
     key = _hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16]
-    stem = _re.sub(r"[^A-Za-z0-9_-]+", "_",
-                   os.path.basename(str(repo).rstrip("/\\")))[:40]
+    base = _re.sub(r"[^A-Za-z0-9_-]+", "_",
+                   os.path.splitext(os.path.basename(str(sig_source).rstrip("/\\")))[0])
+    stem = base[:40]
     dst = os.path.join(root, f"{stem}_{key}")
     stamp = os.path.join(dst, "source.json")
+
+    def _hit():
+        os.utime(dst, None)                           # LRU
+        _log(f"loading Krea 2 transformer (pre-quantized cache, "
+             f"{QUANT_MODE}): reads ~13 GB, no dequant/quantize step ...")
+        return _load_monitor(
+            f"transformer {stem} ({QUANT_MODE}, pre-quantized)",
+            lambda: Krea2Transformer2DModel.from_pretrained(
+                dst, torch_dtype=DTYPE, use_safetensors=False))
+
     if os.path.isfile(stamp):
         try:
             with open(stamp, "r", encoding="utf-8") as f:
-                ok = json.load(f).get("sig") == sig
+                if json.load(f).get("sig") == sig:
+                    return _hit()
         except Exception:
-            ok = False
-        if ok:
-            os.utime(dst, None)                       # LRU
-            _log(f"loading Krea 2 transformer (pre-quantized cache, "
-                 f"{QUANT_MODE}): reads ~13 GB, no dequant/quantize step ...")
-            return _load_monitor(
-                f"transformer {stem} ({QUANT_MODE}, pre-quantized)",
-                lambda: Krea2Transformer2DModel.from_pretrained(
-                    dst, torch_dtype=DTYPE, use_safetensors=False))
+            pass
+    # Migration des entrees historiques (cle = dossier converti, detruit par un
+    # nettoyage legitime du cache de conversion): meme stem => meme modele.
+    # On adopte la plus recente complete, on jette les autres du meme stem.
+    if os.path.isdir(root) and not os.path.isdir(dst):
+        cands = [os.path.join(root, d) for d in os.listdir(root)
+                 if d.startswith(base[:24]) and os.path.join(root, d) != dst]
+        def _adoptable(c):
+            # n'adopter qu'une entree HISTORIQUE (cle batie sur le dossier
+            # converti) du MEME schema de quantification. Deux refus:
+            #  - autre schema: un pickle float8 servi apres un passage a int8
+            #    serait faux;
+            #  - cle nouvelle generation du MEME fichier (sig commencant par
+            #    son chemin): si on arrive ici c'est que la source a CHANGE,
+            #    l'entree est perimee et doit etre reconvertie, pas adoptee.
+            try:
+                with open(os.path.join(c, "source.json"), "r",
+                          encoding="utf-8") as f:
+                    old_sig = json.load(f).get("sig", "")
+            except Exception:
+                return False
+            if not old_sig.endswith("|" + QUANT_MODE):
+                return False
+            return not old_sig.startswith(
+                os.path.abspath(str(sig_source)) + "|")
+        cands = [c for c in cands
+                 if os.path.isdir(c) and _quant_entry_complete(c)
+                 and _adoptable(c)]
+        if cands:
+            best = max(cands, key=os.path.getmtime)
+            try:
+                os.rename(best, dst)
+                with open(stamp, "w", encoding="utf-8") as f:
+                    json.dump({"sig": sig, "quant": QUANT_MODE,
+                               "migrated_from": os.path.basename(best)}, f)
+                _log(f"quant cache: migrated legacy entry "
+                     f"{os.path.basename(best)} -> keyed on the original file")
+                for extra in cands:
+                    if extra != best and os.path.isdir(extra):
+                        import shutil
+                        shutil.rmtree(extra, ignore_errors=True)
+                        _log(f"quant cache: dropped duplicate legacy entry "
+                             f"{os.path.basename(extra)}")
+                return _hit()
+            except OSError as e:
+                _dbg(f"quant cache migration failed: {e}")
+    src_repo = repo_loader()      # conversion eventuelle ICI, sur vrai MISS
     model = _load_monitor(
-        label, lambda: Krea2Transformer2DModel.from_pretrained(repo, **kw))
+        label, lambda: Krea2Transformer2DModel.from_pretrained(src_repo, **kw))
     try:
         t0 = time.time()
         os.makedirs(dst, exist_ok=True)
