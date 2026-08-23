@@ -3,6 +3,26 @@
 All notable changes to crispz-studio. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — quant-cache fix: keyed on the ORIGINAL file, checked BEFORE conversion
+
+Field bug (caught live): the quantization-cache key was built from the
+CONVERTED folder, so purging cache/krea2_convert - a legitimate cleanup the
+README itself suggested - invalidated every cached quantized form and each
+checkpoint selection triggered a full ~10-17 min reconversion despite its
+~12 GB pickle sitting on disk. Three changes:
+
+- the cache key now comes from the ORIGINAL checkpoint file (path+size+mtime;
+  repo id for HF repos): deleting the convert cache no longer invalidates
+  anything;
+- the quant cache is consulted BEFORE any conversion (the converter is only
+  invoked on a true miss), so a hit never touches krea2_convert at all;
+- existing legacy-keyed entries are MIGRATED in place (renamed + restamped,
+  same quantization scheme required, stale new-style entries of a modified
+  source refused) - no reserialization, no reconversion.
+
+Tests: tests/test_quant_cache.py grows to 7 cases, including
+key-survives-convert-purge and legacy-migration.
+
 ## Unreleased — quantization cache: every transformer load drops to ~4 s
 
 Loading Krea 2 - app startup and checkpoint swaps alike - used to read ~26 GB
