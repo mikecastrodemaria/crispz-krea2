@@ -3,6 +3,19 @@
 All notable changes to crispz-studio. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — quant cache DISABLED by default: unpickled torchao tensors render ~3.3x slower
+
+A/B measured at identical settings (1024x1536, 24 steps, offload model):
+316 s per render after a DIRECT load (bf16 + quantize) vs 1060 s after loading
+the torchao pickle - the deserialized tensors lose their fast kernels on
+torch 2.8 + current torchao ('Unable to import torchao Tensor objects' at
+startup). The regression was invisible to the original validation, which
+checked load time (~4 s, real) and pixel correctness (corr 1.0000, the math
+stays right) but never render speed. Default flips to off; the option stays
+for re-testing on a future torch/torchao pair. The CONVERT cache remains the
+supported speed layer (bf16 folder -> normal quantized load). If you enabled
+the quant cache, cache/krea2_quant can be deleted (~12 GB per entry).
+
 ## Unreleased — aspect ratios capped at ~1.05 Mpx (32 GB VRAM budget)
 
 At 1024x1536 (1.57 Mpx) the quantized 12.9B transformer plus its activations

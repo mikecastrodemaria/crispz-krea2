@@ -1403,7 +1403,14 @@ def _load_transformer():
 def _quant_cache_dir():
     """Config quant_cache: 'auto' (defaut) = <app>/cache/krea2_quant,
     chemin = dossier custom, 'off' = desactive (chargement direct)."""
-    mode = str(CONFIG.get("quant_cache", "auto") or "auto")
+    # DEFAUT OFF depuis le 23/08: sur torch 2.8 + ce torchao, les tenseurs
+    # DEPICKLES perdent leurs kernels rapides et les rendus sont ~3.3x plus
+    # lents (mesure A/B: 316 s direct vs 1060 s via pickle, memes reglages),
+    # alors que le chargement, lui, tombe bien a ~4 s. La correction etait
+    # invisible aux tests (corr pixel 1.0000: les maths restent justes, seule
+    # la vitesse casse). Opt-in conserve pour re-tester sur un futur couple
+    # torch/torchao ou la serialisation garde les kernels.
+    mode = str(CONFIG.get("quant_cache", "off") or "off")
     if mode.lower() == "off":
         return None
     if mode.lower() == "auto":

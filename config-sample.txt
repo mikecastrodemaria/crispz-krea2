@@ -196,7 +196,7 @@
     "convert_cache_max_gb": 80,
     "_convert_cache_max_gb_help": "Size cap of the convert cache in GB (each entry is ~26 GB); least-recently-used conversions are evicted past it. 0 = unlimited.",
     "quant_cache": "auto",
-    "_quant_cache_help": "Where the QUANTIZED form of the transformer (~13 GB torchao pickle) is cached so every load - app startup and checkpoint swaps alike - skips the ~26 GB bf16 read AND the quantize step. 'auto' (default) = <app>/cache/krea2_quant, any path = custom folder, 'off' = always load + quantize directly. Keyed on (source weights, quantization scheme): changing 'quantization' or reconverting a checkpoint re-caches. Safe to delete anytime.",
+    "_quant_cache_help": "EXPERIMENTAL, default off. Caches the torchao-quantized form (~13 GB pickle) so loads drop to ~4 s - BUT on torch 2.8 + current torchao, unpickled tensors lose their fast kernels and RENDERS get ~3.3x slower (A/B measured 316 s vs 1060 s, same settings, pixel-identical output). Leave off unless you are testing a newer torch/torchao pair; the convert cache (convert_cache) remains the supported speed layer.",
     "quant_cache_max_gb": 60,
     "_quant_cache_max_gb_help": "Size cap of the quant cache in GB (each entry is ~13 GB); least-recently-used entries are evicted past it. 0 = unlimited.",
     "convert_device": "auto",
