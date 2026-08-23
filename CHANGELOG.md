@@ -3,6 +3,16 @@
 All notable changes to crispz-studio. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — aspect ratios capped at ~1.05 Mpx (32 GB VRAM budget)
+
+At 1024x1536 (1.57 Mpx) the quantized 12.9B transformer plus its activations
+sit at a measured 32.1/32.6 GB - any third-party allocation tips the render
+into shared RAM and a ~2 min render silently becomes 4-5 min. The six >1.2 Mpx
+entries are replaced by same-ratio ~1 Mpx equivalents (2:3 exact -> 832x1248,
+16:9 -> 1344x768, 4:3 -> 1152x864, 5:4 -> 1120x896...); every ratio is still
+served, the final size belongs to the ESRGAN upscale. Legacy labels stored in
+presets/preferences resolve automatically to their capped equivalent.
+
 ## Unreleased — prompt & negative boxes: capped growth + a visible scrollbar
 
 A long prompt used to grow the textarea unpredictably (Gradio-version
