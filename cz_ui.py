@@ -1734,7 +1734,9 @@ def _ui_generate(prompt, negative, styles, style_random, use_input, input_image,
             # action manuelle. Reutilise le meme pipeline que l'onglet Upscale/img2img.
             if auto_upscale:
                 progress((i + 0.5) / n, desc=f"Upscaling {i + 1}/{n}")
-                eff_denoise = float(denoise) if do_refine else 0.0
+                # Sans pipeline img2img (Krea 2), le refine du chainage est
+                # impossible: denoise force a 0 -> process_one = ESRGAN pur.
+                eff_denoise = float(denoise) if (do_refine and HAS_IMG2IMG) else 0.0
                 img, ut = process_one(
                     base_img, esrgan_model, factor, eff_denoise, refine_steps, fp, s,
                     tile, overlap, refine_tile=refine_tile, refine_overlap=refine_overlap,
@@ -3008,14 +3010,18 @@ def build_ui():
 
                 with gr.Row():
                     # Chainage txt2img -> upscale (gauche) + Improve prompt (droite), alignes.
-                    # Le chainage txt2img -> upscale passe par process_one(), donc par
-                    # l'img2img. Sans pipeline img2img (Krea 2), la case est masquee et
-                    # forcee a False plutot que de mener a une erreur au clic.
+                    # Le chainage txt2img -> upscale est disponible MEME sans pipeline
+                    # img2img: process_one() a denoise 0 fait un upscale ESRGAN pur
+                    # (aucune diffusion). Le refine du chainage est force a 0 plus bas
+                    # tant que HAS_IMG2IMG est faux.
                     auto_upscale_cb = gr.Checkbox(
-                        value=bool(CONFIG.get("default_auto_upscale", False)) and HAS_IMG2IMG,
-                        scale=4, visible=HAS_IMG2IMG,
+                        value=bool(CONFIG.get("default_auto_upscale", False)),
+                        scale=4,
                         label="Upscale after generate — chain each txt2img image through the "
-                              "Upscale pipeline (ESRGAN + refine), no manual step")
+                              + ("Upscale pipeline (ESRGAN + refine), no manual step"
+                                 if HAS_IMG2IMG else
+                                 "ESRGAN upscale (pure ESRGAN — Krea 2 has no refine "
+                                 "pipeline), no manual step"))
                     improve_btn = gr.Button("Improve prompt", scale=1, min_width=150)
                 # Le detaileur repasse chaque visage en img2img -> indisponible avec
                 # Krea 2 (pas de Krea2Img2ImgPipeline dans diffusers): cache comme le refine.
