@@ -3,6 +3,16 @@
 All notable changes to crispz-studio. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — 'Upscale after generate' now available (pure-ESRGAN chaining)
+
+The checkbox was hidden on Krea 2 because the txt2img->upscale chain goes
+through process_one(), which includes the img2img refine - unavailable here.
+Over-cautious: process_one() at denoise 0 is a PURE ESRGAN upscale, no
+diffusion involved. The checkbox is back (label says ESRGAN-only), and the
+chain forces the refine denoise to 0 as long as there is no img2img pipeline -
+the day diffusers ships Krea2Img2ImgPipeline, the full ESRGAN+refine chain
+lights up by itself.
+
 ## Unreleased — quant cache DISABLED by default: unpickled torchao tensors render ~3.3x slower
 
 A/B measured at identical settings (1024x1536, 24 steps, offload model):
