@@ -3595,7 +3595,12 @@ def build_ui():
                                 wild_create_btn = gr.Button("Create new", size="sm", variant="primary")
                             wild_status = gr.Markdown("")
 
-                        with gr.Accordion("\U0001F5BC️ Omni / Edit (multi-reference)", open=False):
+                        # Krea 2 has no instruction-edit/Omni pipeline
+                        # (CAPABILITIES['omni'] = False, _load_omni raises):
+                        # this settings block would promise a tab that can
+                        # never appear -> hidden, kept for merge compat.
+                        with gr.Accordion("\U0001F5BC️ Omni / Edit (multi-reference)", open=False,
+                                          visible=bool(cz_pipeline.CAPABILITIES.get("omni"))):
                             gr.Markdown("*The Reference (Omni) tab uses Qwen-Image-Edit "
                                         "(default: Qwen/Qwen-Image-Edit-2509, multi-image instruction "
                                         "editing). Set another repo here, then restart.*")

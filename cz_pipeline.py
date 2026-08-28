@@ -855,9 +855,17 @@ def set_omni_model(repo):
 
 def check_omni_available():
     """Onglet Edit = Qwen-Image-Edit (modele d'edition par instruction). Verifie que le
-    repo d'edition configure existe sur Hugging Face (API publique)."""
+    repo d'edition configure existe sur Hugging Face (API publique).
+
+    Krea 2 n'a PAS de modele d'edition (CAPABILITIES['omni'] False,
+    DEFAULT_OMNI_REPO None): reponse claire au lieu d'un AttributeError sur
+    None.strip() si le bouton est atteint quand meme."""
     import urllib.request
-    repo = (OMNI_MODEL or DEFAULT_OMNI_REPO).strip()
+    repo = ((OMNI_MODEL or DEFAULT_OMNI_REPO) or "").strip()
+    if not CAPABILITIES.get("omni") or not repo:
+        return ("**Omni/Edit is not available for Krea 2** - no "
+                "instruction-edit model exists for this model family. Use "
+                "crispz-qwen-edit (Qwen-Image-Edit) for reference/edit work.")
     try:
         req = urllib.request.Request("https://huggingface.co/api/models/" + repo,
                                      headers={"User-Agent": "crispz-krea2"})
