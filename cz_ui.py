@@ -1,4 +1,4 @@
-"""crispz-studio - interface Gradio (build_ui) + handlers UI + orchestration commune
+"""crispz-krea2 - interface Gradio (build_ui) + handlers UI + orchestration commune
 (run / _editor_* / presets / timing) extraite de app.py (step 8).
 
 Ce module branche tous les cz_* (core/pipeline/esrgan/face/prompt/ollama/imageio/
@@ -1699,7 +1699,7 @@ def _ui_generate(prompt, negative, styles, style_random, use_input, input_image,
                     if "CUDA" in str(e) or "out of memory" in str(e).lower():
                         msg += ("  \n**VRAM saturee** (autre app GPU comme ComfyUI encore chargee ? "
                                 "spill -> timeout Windows TDR). Ferme les autres apps GPU, **redemarre "
-                                "crispz-studio** (le contexte CUDA est mort), baisse refine_tile / factor.")
+                                "crispz-krea2** (le contexte CUDA est mort), baisse refine_tile / factor.")
                     # Les images deja produites restent affichees/sauvees.
                     return _done(images, "  \n".join(reports + [msg]), img_paths)
                 images.append(last_result)
@@ -3005,7 +3005,7 @@ def build_ui():
     # la famille de modele sait editer. Krea 2 -> HAS_OMNI False, l'onglet ne s'affiche pas.
     omni_on = bool((cz_pipeline.OMNI_MODEL or "").strip()) and HAS_OMNI
 
-    with gr.Blocks(title=f"crispz-studio {APP_VERSION}", theme=gr.themes.Default(), css=FOOOCUS_CSS,
+    with gr.Blocks(title=f"crispz-krea2 {APP_VERSION}", theme=gr.themes.Default(), css=FOOOCUS_CSS,
                    js=js_full, head=_ui_head()) as demo:
         # La galerie du dossier de sortie s'ouvre dans un nouvel onglet (Asset Browser),
         # via le bouton sous l'apercu. Pas de panneau galerie inline.
