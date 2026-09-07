@@ -124,7 +124,7 @@
     "face_detailer": false,
     "face_detailer_denoise": 0.35,
     "face_detailer_max_faces": 4,
-    "_hand_detailer_help": "Tick '🖐 Detail hands' by default: after each render, detected hands are re-refined at high resolution like faces are. Needs the optional 'ultralytics' package (requirements-extra.txt); without it the feature logs a message and does nothing.",
+    "_hand_detailer_help": "Tick '🖐 Detail hands' by default: after each render, detected hands are re-refined at high resolution like faces are. At run time it needs only onnxruntime plus the detector exported once to cache/*.onnx; 'ultralytics' is required solely for that export, which runs in a subprocess (it must never live in the diffusion process - see cz_detailer._ensure_hand_onnx). If you would rather not install ultralytics here, export the .onnx from a throwaway venv and drop it in cache/: the app picks it up.",
     "hand_detailer": false,
     "_hand_detailer_denoise_help": "Strength of the per-hand refine pass (0.1-0.7). Hands usually want more than faces (0.4-0.5) to fix fingers; too high invents a different hand.",
     "hand_detailer_denoise": 0.4,
