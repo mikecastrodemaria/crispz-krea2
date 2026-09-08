@@ -3,6 +3,43 @@
 All notable changes to crispz-krea2. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — LoKr, merged into the weights
+
+A LyCORIS LoKr applied nothing here, and said nothing. Its update is a Kronecker
+product, `dW = w1 (x) w2`; peft cannot pose it and diffusers has no conversion for it
+-- not one occurrence of `lokr` in `loaders/lora_conversion_utils.py`. And it slipped
+past every guard: ai-toolkit writes `diffusion_model.blocks.0.attn.wk.lokr_w1`, which
+is neither `.lora_A/B` nor a `lora_unet_` prefix, so the checkpoint guard took it for
+a model and the LoRA path handed it straight to `load_lora_weights`, which recognised
+none of its keys, applied nothing and raised nothing. The render came out exactly as
+if the adapter had not been selected.
+
+It is now **merged into the transformer weights** at load: drop it in the LoRA folder,
+pick it in *Models > LoRA*. SNOFS for Krea 2 ships that way
+([Ashen3/SNOFS](https://huggingface.co/Ashen3/SNOFS)) -- the full checkpoints beside it
+are third-party merges, and one of them, on the klein side, measured **145x** further
+from its base than its own adapter could account for.
+
+Key conversion goes through `_krea2_rename`, this fork's own table -- the one that
+already converts a Comfy single file into a diffusers folder -- so it cannot drift from
+how the model is loaded. Verified on the real file before the code was written: the
+**256 modules** of `snofs_krea_v1_4` all land on an existing weight, shape included,
+none missing. Anything that fails to find its target is reported, never dropped.
+
+Krea 2 has no fused qkv (`wq`/`wk`/`wv` are separate), so unlike the klein fork there
+is no projection to split. The scale follows LyCORIS: no scalar when `w1` and `w2` are
+full, `alpha / rank` otherwise -- ai-toolkit writes `alpha = lora_dim` in the full case
+(measured 1e10), so both conventions agree on 1.0. Merging runs module by module (the
+whole delta would be tens of GB) and the addition is done in float32, since adding a
+small delta to a bf16 weight *in* bf16 drops its low bits. Measured on the real
+adapter: **63.5 s**, 256/256 merged.
+
+**The trade-off, stated:** a merge is not an adapter. Changing which LoKr is selected,
+or its weight, reloads the transformer -- announced in the log -- where a PEFT LoRA is
+swapped in place. LoHa remains unsupported and refused by name.
+
+Regression tests in `tests/test_lokr_merge.py`.
+
 ## Unreleased — cache the encoded prompt: stop moving the text encoder per call
 
 Encoding a prompt walks the text encoder onto the GPU. Under
