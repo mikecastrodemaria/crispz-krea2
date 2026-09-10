@@ -354,6 +354,22 @@ def _cfg(negative=None):
     return kw
 
 
+
+def guidance_from_standard_cfg(cfg):
+    """Guidance Krea 2 correspondant a une CFG STANDARD (ComfyUI, A1111, CivitAI).
+
+    La CFG standard vaut uncond + cfg*(cond-uncond): 1.0 = pas de guidance. Krea 2
+    ecrit cond + g*(cond-uncond) = uncond + (1+g)*(cond-uncond), donc g = cfg - 1, et
+    0.0 coupe la guidance (le docstring de Krea2Pipeline le dit: "scale 1 +
+    guidance_scale"). Recopier le cfg tel quel -- ce que faisait le bouton 'Apply
+    CivitAI recommended settings' -- changeait un 'cfg 1' communautaire (pas de
+    guidance) en g = 1.0: CFG ACTIVEE, echelle standard 2, deux passes par step sur un
+    Turbo distille. L'inverse de ce que la communaute utilisait. None si illisible."""
+    try:
+        return max(0.0, round(float(cfg) - 1.0, 2))
+    except (TypeError, ValueError):
+        return None
+
 # --- Cache d'embeddings de prompt -------------------------------------------------
 # Encoder un prompt fait passer l'encodeur de texte par le GPU. En offload 'model'
 # ce transfert est paye a CHAQUE appel de pipeline -- y compris les passes du

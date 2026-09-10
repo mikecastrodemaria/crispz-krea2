@@ -700,8 +700,15 @@ def _ui_civitai_reco(name, progress=gr.Progress()):
         st_u = gr.update(value=int(reco["steps"]))
         parts.append(f"steps={reco['steps']}")
     if reco.get("guidance") is not None:
-        g_u = gr.update(value=float(reco["guidance"]))
-        parts.append(f"CFG={reco['guidance']}")
+        # CivitAI publie une CFG STANDARD (ComfyUI/A1111: 1.0 = pas de guidance). Krea 2
+        # a sa propre convention (0.0 = pas de guidance, g = cfg - 1). Recopiee telle
+        # quelle, un 'cfg 1' communautaire devenait g = 1.0: CFG ACTIVEE sur un Turbo
+        # distille, deux passes par step. On convertit, et on le dit.
+        g = cz_pipeline.guidance_from_standard_cfg(reco["guidance"])
+        if g is not None:
+            g_u = gr.update(value=g)
+            parts.append(f"CFG={reco['guidance']} (ComfyUI) -> guidance {g:g} "
+                         f"(Krea 2 convention, 0 = off)")
     if reco.get("sampler"):
         parts.append(f"sampler={reco['sampler']}"
                      + ("" if samp else " → no Z-Image equivalent, kept current"))

@@ -3,6 +3,22 @@
 All notable changes to crispz-krea2. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — CivitAI's CFG, converted to Krea 2's guidance
+
+*Apply CivitAI recommended settings* copied the published `cfgScale` straight into the
+guidance slider. CivitAI publishes a **standard** CFG (ComfyUI, A1111):
+`uncond + cfg·(cond − uncond)`, 1.0 = no guidance. Krea 2 has its own convention:
+`cond + g·(cond − uncond)`, i.e. a standard CFG of `1 + g`, and 0.0 turns guidance off
+(the Krea2Pipeline docstring says as much). All 14 Krea 2 checkpoints in the library
+recommend 1.0 -- no guidance, for their authors -- and the button set g = 1.0: CFG
+**on**, standard scale 2, two passes per step on distilled Turbo merges trained for
+g = 0. The opposite of what the community used, at twice the cost.
+
+`guidance_from_standard_cfg` converts `g = max(0, cfg − 1)`, and the status line shows
+it: `CFG=1.0 (ComfyUI) -> guidance 0 (Krea 2 convention, 0 = off)`. The sidecar keeps
+the value as CivitAI published it; only its application converts. Regression tests in
+`tests/test_civitai_guidance.py`.
+
 ## Unreleased — The input image, named
 
 Ported from crispz-klein 1.32.0. An img2img, an inpaint or an edit is defined as much
