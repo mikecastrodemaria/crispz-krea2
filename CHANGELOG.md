@@ -3,6 +3,55 @@
 All notable changes to crispz-krea2. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — Swap the text encoder
+
+Ported from crispz-klein 1.34.0. Models > Checkpoints gets a **Text encoder** picker.
+Default is the base repo's own Qwen3-VL, as before. Otherwise a transformers folder
+(config.json + safetensors) or a Hugging Face repo id (`owner/repo`, or
+`owner/repo/subfolder` when the weights sit in a sub-folder), for instance an
+abliterated Qwen3-VL-4B. Only the encoder changes: tokenizer, VAE and transformer still
+come from the base repo, and torchao quantization still touches the transformer alone.
+The encoder loads in bf16 with the class the base repo's `model_index.json` names
+(`Qwen3VLModel`).
+
+A candidate is checked against the base repo's own encoder config **before** anything
+loads: same model type (`qwen3_vl`), same hidden size (2560), same layer count (36),
+read under `text_config`, where Qwen3-VL keeps them. The layer count matters here:
+`Krea2Pipeline.get_text_hidden_states` runs the encoder with `output_hidden_states=True`
+and stacks `outputs.hidden_states[i]` for the fixed indices of
+`text_encoder_select_layers` -- (2, 5, ..., 35), in `model_index.json` and as the
+pipeline's default -- twelve of them, as many as `transformer.config.num_text_layers`.
+An encoder with fewer layers runs out of indices at the first prompt; one with more
+feeds the transformer states from other depths than it was trained on, silently. A
+text-only Qwen3-4B is refused as well (`qwen3`, not `qwen3_vl`): same width and depth,
+another architecture. GGUF and single files are refused with the reason: there is no
+config.json, give the folder.
+
+Changing the encoder frees the pipeline (the encoder loads with it) and clears the
+prompt-embedding cache. The cache key now carries the encoder as well: `id(enc)` alone
+was not enough, since CPython reuses the id of a freed object. An encoder that turns out
+not to fit at load time (the base repo changed since it was picked, the folder moved,
+the weights fail to load) is set aside with a log line and the base encoder runs: a
+generation never fails over it. The image says which: `text_encoder` in the metadata
+names the encoder that actually ran, by folder name and never by path;
+`text_encoder_not_applied` names one that was asked for and skipped. Both are written
+with or without a transformer override, unlike `base_repo`. The A1111 `parameters` line
+gains `Text encoder:`. The queue snapshot keeps the encoder, so a replayed job runs with
+its own.
+
+Choosing **Default** saves an empty `text_encoder` in the preferences, and that empty
+value wins over a `text_encoder` set in config.txt at the next start (an empty string used
+to count as absent); the environment variable still wins over both.
+
+Config: `text_encoder`, `text_encoders_dir` (the list scans its sub-folders; default
+`text_encoders`, `text_encoder` or `clip` next to the checkpoints folder or its parent).
+Env `KREA2_TEXT_ENCODER`.
+
+Checked on GPU: the stock encoder, loaded through this path from its own folder,
+renders the same image bit for bit (0/255 at 1024 x 1024, 8 steps, same seed), and a
+text-only Qwen3 is refused (Krea 2 needs a `qwen3_vl`). Regression tests in
+`tests/test_text_encoder.py`.
+
 ## Unreleased — CivitAI's CFG, converted to Krea 2's guidance
 
 *Apply CivitAI recommended settings* copied the published `cfgScale` straight into the
@@ -16,8 +65,10 @@ g = 0. The opposite of what the community used, at twice the cost.
 
 `guidance_from_standard_cfg` converts `g = max(0, cfg − 1)`, and the status line shows
 it: `CFG=1.0 (ComfyUI) -> guidance 0 (Krea 2 convention, 0 = off)`. The sidecar keeps
-the value as CivitAI published it; only its application converts. Regression tests in
-`tests/test_civitai_guidance.py`.
+the value as CivitAI published it; only its application converts. Checked on GPU
+(Krea-2-Turbo, 8 steps, 1024 x 1024, same seed): guidance 1.0 renders another image
+(mean gap 22.7/255) and takes 1.95 times as long as guidance 0; guidance 0 twice gives
+the same image. Regression tests in `tests/test_civitai_guidance.py`.
 
 ## Unreleased — The input image, named
 

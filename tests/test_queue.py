@@ -81,7 +81,9 @@ def test_render():
 
 def test_model_state_roundtrip_keys():
     ms = cz_ui._q_model_state()
-    assert set(ms) == {"base_repo", "transformer", "loras", "sampler", "schedule"}
+    # 'text_encoder' depuis le selecteur d'encodeur: un job rejoue garde son encodeur.
+    assert set(ms) == {"base_repo", "transformer", "loras", "sampler", "schedule",
+                       "text_encoder"}
 
 
 if __name__ == "__main__":
