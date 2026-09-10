@@ -3,6 +3,23 @@
 All notable changes to crispz-krea2. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
+## Unreleased — FP8 weights stored at scale, read as such
+
+Ported from crispz-klein 1.34.1. A FLUX.2 file of the library
+(`kleinFinalcutFP16FP8_comfyQuant`) stores its FP8 weights **already at scale** and still
+ships a `weight_scale`; the same single-file reader applied it and made every weight
+1,200 to 1,700 times too small, so the model rendered noise. `_stored_at_scale`
+recognises the layout: the stored values fill less than a quarter of the format range
+(448 for E4M3, 127 for INT8) AND max / (scale x range) sits between 0.5 and 2. A regular
+scaled file fills the range, and its ratio is 1 / scale: 71 to 1,691 across the 16 other
+FP8/INT8 files of the library, Krea 2 ones included. The scale is then left out; MX
+exponent scales are never concerned, and the load log counts the tensors left alone.
+
+No Krea 2 file of the library has this layout today, so no conversion cached under
+`cache/krea2_convert` holds wrong weights. The day one does, its folder there (named after
+the checkpoint) must be deleted once: the conversion cache is keyed on the file, not on the
+reader. Regression tests in `tests/test_prescaled_fp8.py`.
+
 ## Unreleased — Swap the text encoder
 
 Ported from crispz-klein 1.34.0. Models > Checkpoints gets a **Text encoder** picker.

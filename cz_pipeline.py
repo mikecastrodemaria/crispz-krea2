@@ -1505,6 +1505,37 @@ def _krea2_rename(k):
     return None
 
 
+# Plage de chaque format 8 bits: la valeur stockee la plus grande qu'un poids QUANTIFIE
+# (poids / echelle) peut atteindre.
+_QUANT_RANGE = {torch.float8_e4m3fn: 448.0, torch.float8_e5m2: 57344.0, torch.int8: 127.0}
+
+
+def _stored_at_scale(t, s, qdtype, cfg=None):
+    """Vrai si les poids stockes sont DEJA a leur echelle reelle, un weight_scale etant
+    fourni en plus -- a ne pas appliquer. Porte de crispz-klein 1.34.1.
+
+    Un FP8 'scaled' normal stocke poids / echelle: il REMPLIT la plage du format (448 en
+    E4M3) et max|stocke| / (echelle x plage) vaut 1 / echelle (71 a 1 691 sur les 16
+    fichiers FP8/INT8 de la bibliotheque). kleinFinalcutFP16FP8_comfyQuant stocke ses
+    poids tels quels (0,375 sur 448) et fournit amax / 448 quand meme: rapport 1,03.
+    Appliquer l'echelle rendait chaque poids 1 200 a 1 700 fois trop petit, et l'image
+    sortait en bruit. Les echelles MX (uint8 = exposant E8M0) ne sont jamais concernees."""
+    rng = _QUANT_RANGE.get(qdtype)
+    fmt = str((cfg or {}).get("format", "")).lower()
+    if rng is None or s.dtype == torch.uint8 or fmt.startswith("mx"):
+        return False
+    smax = float(s.detach().float().abs().max())
+    if smax <= 0.0:
+        return False
+    amax = float(t.detach().float().abs().max())
+    # 1. plage peu utilisee (un fichier normal la remplit)...
+    if amax >= rng / 4:
+        return False
+    # 2. ... ET l'echelle decrit exactement les valeurs stockees: rapport ~1.
+    ratio = amax / (smax * rng)
+    return 0.5 <= ratio < 2.0
+
+
 def _hadamard_ortho(n):
     """Matrice 'regular hadamard' du ConvRot comfy-quants -- ATTENTION, ce n'est
     PAS la construction de Sylvester: base H4 precise, etendue par produits de
@@ -1592,7 +1623,7 @@ def _read_comfy_state_dict(path):
     except Exception:
         pass
     _had, sd = {}, {}
-    n_dq = n_rot = 0
+    n_dq = n_rot = n_pre = 0
     for k in list(raw.keys()):
         if (k.endswith((".weight_scale", ".scale_weight", ".scale_input",
                         ".input_scale")) or k.endswith("scaled_fp8")):
@@ -1607,10 +1638,14 @@ def _read_comfy_state_dict(path):
                 if cand and cand in raw:
                     s = raw[cand]
                     break
+            qdt = t.dtype
             t = t.to(dev).to(torch.float32)
+            cfg = qcfg.get(k[:-len(".weight")]) if k.endswith(".weight") else None
+            if s is not None and _stored_at_scale(t, s, qdt, cfg):
+                s = None                     # deja a l'echelle: cf. _stored_at_scale
+                n_pre += 1
             if s is not None:
                 t = t * s.to(dev).to(torch.float32)
-            cfg = qcfg.get(k[:-len(".weight")]) if k.endswith(".weight") else None
             if cfg and cfg.get("convrot"):
                 g = int(cfg.get("convrot_groupsize", 256) or 256)
                 if t.dim() == 2 and g > 1 and t.shape[1] % g == 0:
@@ -1632,6 +1667,7 @@ def _read_comfy_state_dict(path):
     if n_dq:
         _log(f"dequantized {n_dq} tensors"
              + (f", {n_rot} un-rotated (ConvRot)" if n_rot else "")
+             + (f", {n_pre} already stored at scale: weight_scale NOT applied" if n_pre else "")
              + (f" on {dev}" if n_dq else "")
              + f" in {time.time() - t0:.1f}s")
     return sd
