@@ -111,7 +111,7 @@
     "default_overlap": 32,
     "default_refine_tile": 0,
     "default_refine_overlap": 64,
-    "default_cpu_offload": "model",
+    "default_cpu_offload": "auto",
     "attention_slice_above": 1664,
     "auto_refine_tile_above": 1664,
     "auto_refine_tile": "auto",
@@ -219,7 +219,7 @@
     "_convert_device_help": "Where the one-time dequantization math of FP8/INT8 checkpoints runs during conversion. 'auto' (default) = GPU if available (tensor-by-tensor, ~1 GB VRAM peak - the CPU path measured ~9 min on a 12.9B INT8, memory-bandwidth-bound), 'cpu' = never touch the GPU (pick this if you convert while rendering elsewhere).",
     "quantization": "float8_weight_only",
     "_quantization_help": "torchao scheme applied to the transformer at load. Krea 2 is 12.9B: raw bf16 needs ~26 GB and overflows a 32 GB card (measured 35.6 GB peak, 59 s/step). float8_weight_only -> 22.8 GB, ~2.4 s/step, visually identical (weights only, activations stay bf16). Options: float8_weight_only | int8_weight_only | int4_weight_only | float8_dynamic | none (needs >32 GB VRAM).",
-    "_default_cpu_offload_help": "Krea 2 transformer (13 GB quantized) + Qwen3-VL text encoder (8.9 GB) do not both fit alongside activations on 32 GB -> 'model' keeps the encoder on CPU between generations. Measured 22.8 GB peak with float8_weight_only.",
+    "_default_cpu_offload_help": "'auto' (default) runs a free-VRAM test at model load and picks the fastest safe mode: Krea 2 transformer (13 GB quantized) + Qwen3-VL text encoder (8.9 GB) peak at 22.8 GB with float8_weight_only -> 'none' on a free 32 GB card, 'model' below (keeps the encoder on CPU between generations). Explicit none/model/sequential skips the test.",
     "cli_protocol": {"instance_url": "http://127.0.0.1:7860"},
     "_cli_protocol_help": "Family CLI protocol v1 (czp.bat / cz_protocol.py): JSON spec in, JSON out. 'czp gen --spec spec.json' ROUTES to the app instance running at instance_url (its queue serializes the GPU, model stays warm) and only loads the pipeline itself when no instance answers (night batch; or force with --local / --remote URL). 'czp caps' prints this tool's capabilities + whether an instance is running. Exit codes: 0 ok, 1 run error, 2 bad spec, 3 unsupported op/protocol, 4 no route. One image per call - the caller loops.",
 

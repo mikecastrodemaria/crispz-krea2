@@ -87,6 +87,7 @@ def supports(feature):
     return bool(CAPABILITIES.get(feature, False))
 from cz_esrgan import load_esrgan, esrgan_upscale
 from cz_imageio import _now_stamp
+import cz_hw
 
 # Vitesse: autorise TF32 (matmul/cudnn) sur GPU. Gain gratuit sur Ampere+ pour les
 # operations fp32 residuelles; les poids restent BF16. Sans effet hors CUDA.
@@ -196,15 +197,24 @@ _LOADED_KEY = None
 # LoRA a chaud sans recharger le modele: si ca diverge de LORAS, _apply_loras resynchronise.
 _APPLIED_LORAS = []
 
-# Palier 2 (cohabitation VRAM): offload CPU de la passe diffusion. none = tout en VRAM.
-# model = decharge par sous-module (bon compromis). sequential = plus agressif, plus lent.
-# N'est PAS de la quantif: les poids restent BF16, ils transitent RAM <-> GPU.
-# Krea 2 est gros (12.9B, 26 Go en bf16) : on initialise depuis la config (default_cpu_offload, defaut
-# 'model' pour ce fork) ou l'env CZ_OFFLOAD -> offload actif DES le 1er chargement (anti-OOM).
-OFFLOAD_CHOICES = ("none", "model", "sequential")
-OFFLOAD_MODE = (os.environ.get("CZ_OFFLOAD") or CONFIG.get("default_cpu_offload") or "none")
+# Palier 2 (cohabitation VRAM): offload CPU de la passe diffusion. none = tout en VRAM
+# (le plus rapide). model = decharge par sous-module (bon compromis). sequential = plus
+# agressif, plus lent. N'est PAS de la quantif: les poids restent BF16, ils transitent
+# RAM <-> GPU. 'auto' (defaut) = test de VRAM libre au chargement (cz_hw): un modele qui
+# deborde la VRAM ne plante pas, il bascule en RAM partagee (Windows Sysmem Fallback) et
+# rend 50-100x plus lentement SANS message d'erreur -> on ne promeut 'none' que si la
+# carte a prouve qu'elle a la place. Ordre de resolution (le premier defini gagne):
+# choix UI/CLI explicite > env CZ_OFFLOAD > config default_cpu_offload > auto.
+OFFLOAD_CHOICES = ("auto", "none", "model", "sequential")
+OFFLOAD_MODE = ((os.environ.get("CZ_OFFLOAD") or "").strip()
+                or str(CONFIG.get("default_cpu_offload", "") or "").strip()).lower() or "auto"
 if OFFLOAD_MODE not in OFFLOAD_CHOICES:
-    OFFLOAD_MODE = "none"
+    _log(f"CZ_OFFLOAD/default_cpu_offload '{OFFLOAD_MODE}' unknown -> auto")
+    OFFLOAD_MODE = "auto"
+# Mode concret resolu pour 'auto' (pose par _resolve_auto au 1er chargement) et flag du
+# filet de securite runtime (pose par le callback VRAM pendant le denoise).
+_AUTO_OFFLOAD = ""
+_VRAM_DOWNGRADE = False
 
 # Guidance Krea 2. Convention DIFFERENTE de Qwen: le curseur de l'UI pilote directement
 # `guidance_scale`, la velocite valant cond + g*(cond-uncond); la guidance est active des
@@ -482,9 +492,12 @@ def _qwen_call(pipe, **kw):
     try:
         return pipe(**kw)
     except TypeError as e:
-        if "negative_prompt" in kw:
-            kw.pop("negative_prompt", None)
-            _dbg(f"krea2 call: retry sans negative_prompt ({e})")
+        # callback_on_step_end = garde VRAM optionnelle (cf. _vram_guard_kwargs):
+        # une vieille build diffusers qui ne le connait pas tourne sans garde.
+        if any(k in kw for k in ("negative_prompt", "callback_on_step_end")):
+            for k in ("negative_prompt", "callback_on_step_end"):
+                kw.pop(k, None)
+            _dbg(f"krea2 call: retry sans kwargs optionnels ({e})")
             return pipe(**kw)
         raise
 
@@ -1368,13 +1381,117 @@ def check_omni_available():
 
 
 def set_offload_mode(mode):
-    """Change le mode d'offload CPU. Invalide le pipe (hooks poses au chargement)."""
-    global OFFLOAD_MODE
-    mode = mode if mode in OFFLOAD_CHOICES else "none"
+    """Change le mode d'offload CPU. Invalide le pipe (hooks poses au chargement).
+    Valeur inconnue -> 'auto' (jamais 'none': le repli doit etre le mode SUR)."""
+    global OFFLOAD_MODE, _AUTO_OFFLOAD
+    mode = str(mode or "").strip().lower()
+    mode = mode if mode in OFFLOAD_CHOICES else "auto"
     if mode != OFFLOAD_MODE:
         OFFLOAD_MODE = mode
+        _AUTO_OFFLOAD = ""   # 'auto' refait le test VRAM au prochain chargement
         free_vram()
         _log(f"offload -> {OFFLOAD_MODE}: pipeline invalidated -> will reload")
+
+
+# ---- Offload 'auto': test VRAM au chargement + filet de securite runtime (cz_hw) ----
+
+def _hw_profile_path():
+    """Profil des verdicts du test VRAM (JSON), a cote des autres caches."""
+    return os.path.join(HERE, "cache", "hw_profile.json")
+
+
+def _model_footprint_gb():
+    """Empreinte VRAM (Go) du pipeline complet en offload 'none' (poids en VRAM,
+    hors activations). Krea 2 (12.9B) est quantifie fp8 au chargement: pic mesure
+    ~22,8 Go tout-en-VRAM, et les rendus soutiennent ~32 Go des 1,5 MPx -> 26 Go
+    par defaut (marge comprise). En bf16 brut (quant 'none') il pese 35,6 Go et
+    ne tient dans aucune carte 32 Go. Surcharge via config 'model_footprint_gb'."""
+    try:
+        v = float(CONFIG.get("model_footprint_gb", 0) or 0)
+        if v > 0:
+            return v
+    except Exception:
+        pass
+    return 26.0
+
+
+def _resolve_auto(retest=False):
+    """Mode concret pour 'auto' (memoise pour le process). Le verdict est cache
+    dans cache/hw_profile.json par (GPU, build torch/cuda, modele, quant): le
+    test ne coute qu'un mem_get_info par combinaison, puis une lecture JSON."""
+    global _AUTO_OFFLOAD
+    if _AUTO_OFFLOAD and not retest:
+        return _AUTO_OFFLOAD
+    mode, why = cz_hw.resolve(
+        "auto", footprint_gb=_model_footprint_gb(),
+        model_id=(ZIMAGE_TRANSFORMER or BASE_REPO), dtype=str(QUANT_MODE or "bf16"),
+        profile_path=_hw_profile_path(), retest=retest)
+    _AUTO_OFFLOAD = mode
+    _log(f"offload auto -> {mode} ({why})")
+    return mode
+
+
+def offload_status():
+    """Ligne d'etat pour l'UI: mode demande + resolution 'auto' le cas echeant."""
+    if OFFLOAD_MODE != "auto":
+        return f"offload: {OFFLOAD_MODE} (explicit)"
+    if not _AUTO_OFFLOAD:
+        return "offload: auto (resolves at the next model load)"
+    return f"offload: auto -> {_AUTO_OFFLOAD}"
+
+
+def retest_offload():
+    """Bouton 'Re-test VRAM' de l'UI: refait le test en ignorant le profil (autre
+    app fermee/ouverte, driver change...). Invalide le pipe si le verdict change."""
+    if OFFLOAD_MODE != "auto":
+        return f"Offload is '{OFFLOAD_MODE}' (explicit) - select 'auto' to use the VRAM test."
+    old = _AUTO_OFFLOAD
+    mode = _resolve_auto(retest=True)
+    if old and mode != old:
+        free_vram()
+        return f"auto -> {mode} (was {old}; the pipeline will reload)"
+    return f"auto -> {mode}"
+
+
+def _vram_guard_kwargs():
+    """Filet de securite runtime: callback_on_step_end qui verifie APRES le 1er
+    step de denoise en mode effectif 'none' que la VRAM n'est pas saturee (le
+    test au chargement estime; un process tiers a pu arriver depuis, ou la
+    resolution demandee depasse la marge). Sature -> flag + interruption du
+    denoise; l'appelant bascule en 'model' et rejoue le job UNE fois.
+    {} quand la garde est inutile (offload deja actif, pas de CUDA)."""
+    if DEVICE != "cuda" or _effective_offload() != "none":
+        return {}
+
+    def _cb(pipe, i, t, cb_kwargs):
+        global _VRAM_DOWNGRADE
+        if i == 0 and cz_hw.vram_saturated():
+            _VRAM_DOWNGRADE = True
+            pipe._interrupt = True
+        return cb_kwargs
+    return {"callback_on_step_end": _cb}
+
+
+def _consume_vram_downgrade():
+    """Si la garde a declenche: applique la retrogradation vers 'model',
+    l'enregistre dans le profil (le prochain boot demarre directement en 'model')
+    et libere le pipe. True -> l'appelant rejoue le job une fois."""
+    global _VRAM_DOWNGRADE, _AUTO_OFFLOAD
+    if not _VRAM_DOWNGRADE:
+        return False
+    _VRAM_DOWNGRADE = False
+    _log("WARNING: VRAM saturated after the first denoise step in offload 'none' "
+         "-> the render would spill to shared RAM (50-100x slower, no error). "
+         "Switching to 'model' and retrying the job once.")
+    cz_hw.record_downgrade(_hw_profile_path(), ZIMAGE_TRANSFORMER or BASE_REPO,
+                           str(QUANT_MODE or "bf16"), "model",
+                           "VRAM saturated after denoise step 1")
+    if OFFLOAD_MODE == "auto":
+        _AUTO_OFFLOAD = "model"
+        free_vram()
+    else:
+        set_offload_mode("model")
+    return True
 
 
 def free_vram():
@@ -1573,6 +1690,8 @@ def _effective_offload(tpath=None):
     GPU via .to(cuda) ni en sequential -> seul enable_model_cpu_offload le pose sur le GPU
     pendant le forward. On force donc 'model' pour un base GGUF, quel que soit le reglage."""
     off = OFFLOAD_MODE
+    if off == "auto":
+        off = _resolve_auto()   # test VRAM (memoise + profil cache) -> mode concret
     t = ZIMAGE_TRANSFORMER if tpath is None else tpath
     if DEVICE == "cuda" and _is_gguf_path(t) and off != "model":
         off = "model"
@@ -2586,7 +2705,8 @@ def _ensure_base():
         else:
             _log(f"text encoder: {_encoder_label(TEXT_ENCODER)} replaces {BASE_REPO}'s "
                  f"own (tokenizer, VAE and transformer unchanged)")
-    _log(f"loading Krea 2 base: {BASE_REPO} (offload={OFFLOAD_MODE}, dtype=bf16, "
+    _off_label = (f"auto->{_resolve_auto()}" if OFFLOAD_MODE == "auto" else OFFLOAD_MODE)
+    _log(f"loading Krea 2 base: {BASE_REPO} (offload={_off_label}, dtype=bf16, "
          f"quant={QUANT_MODE}) ... first time downloads ~35.7 GB from HF (gated), then cached")
     pipe = _load_monitor(f"Krea 2 base {BASE_REPO}",
                          lambda: Krea2Pipeline.from_pretrained(BASE_REPO, torch_dtype=DTYPE,
@@ -2615,8 +2735,9 @@ def _ensure_base():
     # Seul enable_model_cpu_offload (accelerate) le pose correctement sur le GPU pendant le
     # forward. On force donc 'model' pour un base GGUF, quel que soit le reglage UI/config.
     _off = _effective_offload()
-    if _off != OFFLOAD_MODE:
-        _log(f"quantized base: offload '{OFFLOAD_MODE}' forced to '{_off}' (a quantized "
+    _base_off = _resolve_auto() if OFFLOAD_MODE == "auto" else OFFLOAD_MODE
+    if _off != _base_off:
+        _log(f"quantized base: offload '{_base_off}' forced to '{_off}' (a quantized "
              f"transformer does not run on GPU in none/sequential -> would stay on CPU, "
              f"~500s/step)")
     if DEVICE == "cuda" and _off == "model":
@@ -2769,16 +2890,23 @@ def generate(prompt, width, height, steps, seed, negative_prompt=""):
     if DEVICE == "cuda":
         _dbg(f"VRAM before: alloc={torch.cuda.memory_allocated()/1024**3:.2f} Go")
     _progress(0.1, f"Generating {w}x{h} ({int(steps)} steps)...")
-    _set_slicing(pipe, max(w, h))
     t0 = time.time()
-    img = _qwen_call(
-        pipe,
-        prompt=prompt or "",
-        width=w, height=h,
-        num_inference_steps=int(steps),
-        generator=_make_generator(seed),
-        **_cfg(negative_prompt),
-    ).images[0]
+    # Deux tentatives maxi: si la garde VRAM declenche au 1er step (mode 'none'
+    # trop optimiste), _consume_vram_downgrade bascule en 'model' et on rejoue.
+    for _attempt in (0, 1):
+        _set_slicing(pipe, max(w, h))
+        img = _qwen_call(
+            pipe,
+            prompt=prompt or "",
+            width=w, height=h,
+            num_inference_steps=int(steps),
+            generator=_make_generator(seed),
+            **_cfg(negative_prompt),
+            **_vram_guard_kwargs(),
+        ).images[0]
+        if not _consume_vram_downgrade():
+            break
+        pipe = get_pipe("txt2img")   # recharge avec l'offload retrograde
     _log(f"txt2img done in {time.time() - t0:.1f}s")
     if DEVICE == "cuda":
         _dbg(f"VRAM peak: alloc={torch.cuda.max_memory_allocated()/1024**3:.2f} Go | "
@@ -3090,19 +3218,26 @@ def _refine_whole(pipe, image, denoise, steps, prompt, seed):
     img2img retombe sur son defaut (height = default_sample_size * vae_scale_factor = 1024)
     et REDIMENSIONNE l'entree en 1024x1024 -> le ratio est ecrase (bug). En forcant les
     dimensions de l'entree, le ratio d'origine est preserve en upscale/img2img."""
-    _set_slicing(pipe, max(image.size))
     w = round_to_multiple(image.width, 16)
     h = round_to_multiple(image.height, 16)
-    return _qwen_call(
-        pipe,
-        prompt=prompt or "",
-        image=image,
-        width=w, height=h,
-        strength=float(denoise),
-        num_inference_steps=int(steps),
-        generator=_make_generator(seed),
-        **_cfg(None),
-    ).images[0]
+    # Deux tentatives maxi: garde VRAM au 1er step (cf. generate), puis retry en 'model'.
+    for _attempt in (0, 1):
+        _set_slicing(pipe, max(image.size))   # a reposer sur le pipe recharge du retry
+        out = _qwen_call(
+            pipe,
+            prompt=prompt or "",
+            image=image,
+            width=w, height=h,
+            strength=float(denoise),
+            num_inference_steps=int(steps),
+            generator=_make_generator(seed),
+            **_cfg(None),
+            **_vram_guard_kwargs(),
+        ).images[0]
+        if not _consume_vram_downgrade():
+            return out
+        pipe = get_pipe("img2img")   # recharge avec l'offload retrograde
+    return out
 
 
 def _feather_mask_np(th, tw, overlap, left, right, top, bottom):

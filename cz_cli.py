@@ -360,7 +360,9 @@ def cli_main(argv=None):
     # meme sans argument, ce qui rendait 'default_cpu_offload' inoperant.
     parser.add_argument("--cpu-offload", choices=list(cz_pipeline.OFFLOAD_CHOICES),
                         default=cz_pipeline.OFFLOAD_MODE,
-                        help="CPU offload of the diffusion pass (VRAM). none=all in VRAM | "
+                        help="CPU offload of the diffusion pass (VRAM). auto=free-VRAM test "
+                             "at model load picks the fastest SAFE mode (default) | "
+                             "none=all in VRAM (fastest, needs room) | "
                              "model=offload per submodule (good tradeoff) | "
                              "sequential=more aggressive, slower. Requires accelerate. "
                              "Default: config.txt 'default_cpu_offload'.")
