@@ -2855,12 +2855,16 @@ def get_pipe(kind="img2img"):
     UnsupportedFeature avec un message actionnable plutot que de laisser un ImportError
     diffusers ou un silencieux repli sur le txt2img (qui produirait une image sans
     rapport avec l'entree)."""
+    # Le refus vient AVANT le chargement: supports() ne lit que CAPABILITIES (statique),
+    # alors que _ensure_base() telecharge et monte le transformer. Demander l'inpaint ou
+    # l'omni sur cette famille coutait donc ~26 Go de telechargement pour finir sur un
+    # UnsupportedFeature - le refus est net, il n'a pas a etre cher.
+    if kind in _UNSUPPORTED_MSG and not supports(kind):
+        raise UnsupportedFeature(_UNSUPPORTED_MSG[kind])
     base = _ensure_base()
     if kind in _DERIVED:
         _dbg(f"get_pipe('{kind}'): reuse derived")
         return _DERIVED[kind]
-    if kind in _UNSUPPORTED_MSG and not supports(kind):
-        raise UnsupportedFeature(_UNSUPPORTED_MSG[kind])
     cls = None
     if cls is None:
         return base
