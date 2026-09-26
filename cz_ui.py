@@ -452,7 +452,7 @@ def _report_vram():
         return
     alloc = torch.cuda.max_memory_allocated() / 1024**3
     reserved = torch.cuda.max_memory_reserved() / 1024**3
-    print(f"[VRAM] pic alloue: {alloc:.2f} Go | pic reserve: {reserved:.2f} Go",
+    print(f"[VRAM] peak allocated: {alloc:.2f} GB | peak reserved: {reserved:.2f} GB",
           file=sys.stderr)
 
 
@@ -1737,9 +1737,9 @@ def _vram_hint(e):
     cache et le nouvel essai de cz_pipeline.retry_on_oom."""
     if not cz_pipeline.is_oom(e):
         return ""
-    return ("  \n**VRAM saturee**, meme apres vidage du cache : ferme les autres apps GPU "
-            "(ComfyUI...), baisse Image number, le factor d'upscale ou le nombre de "
-            "references. Si le rendu suivant echoue encore, redemarre crispz-krea2.")
+    return ("  \n**VRAM full**, even after clearing the cache: close the other GPU apps "
+            "(ComfyUI...), lower Image number, the upscale factor or the number of "
+            "references. If the next render fails too, restart crispz-krea2.")
 
 
 def _ui_generate(prompt, negative, styles, style_random, use_input, input_image,
@@ -1963,9 +1963,9 @@ def _ui_generate(prompt, negative, styles, style_random, use_input, input_image,
                     _log(f"img2img/upscale error: {e}")
                     msg = f"Upscale/img2img failed: {e}"
                     if "CUDA" in str(e) or "out of memory" in str(e).lower():
-                        msg += ("  \n**VRAM saturee** (autre app GPU comme ComfyUI encore chargee ? "
-                                "spill -> timeout Windows TDR). Ferme les autres apps GPU, **redemarre "
-                                "crispz-krea2** (le contexte CUDA est mort), baisse refine_tile / factor.")
+                        msg += ("  \n**VRAM full** (another GPU app like ComfyUI still loaded? "
+                                "spill -> Windows TDR timeout). Close the other GPU apps, **restart "
+                                "crispz-krea2** (the CUDA context is dead), lower refine_tile / factor.")
                     # Les images deja produites restent affichees/sauvees.
                     return _done(images, "  \n".join(reports + [msg]), img_paths)
                 images.append(last_result)

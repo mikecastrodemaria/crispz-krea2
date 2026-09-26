@@ -497,7 +497,7 @@ def _qwen_call(pipe, **kw):
         if any(k in kw for k in ("negative_prompt", "callback_on_step_end")):
             for k in ("negative_prompt", "callback_on_step_end"):
                 kw.pop(k, None)
-            _dbg(f"krea2 call: retry sans kwargs optionnels ({e})")
+            _dbg(f"krea2 call: retrying without the optional kwargs ({e})")
             return pipe(**kw)
         raise
 
@@ -551,7 +551,7 @@ def _apply_sampler(pipe):
     try:
         sched = _build_scheduler(SAMPLER, SCHEDULE, _BASE_SCHED_CONFIG)
         if not _scheduler_accepts_sigmas(sched):
-            raise ValueError(f"{type(sched).__name__} n'accepte pas les sigmas custom de Z-Image")
+            raise ValueError(f"{type(sched).__name__} does not accept the custom sigmas of Z-Image")
         pipe.scheduler = sched
         _dbg(f"sampler applied: {SAMPLER}/{SCHEDULE} -> {type(pipe.scheduler).__name__}")
     except Exception as e:
@@ -3338,7 +3338,7 @@ def _refine_tiled(pipe, image, denoise, steps, prompt, seed, tile, overlap):
     # Anti-duplication 1: prompt vide par tuile (le prompt global decrit toute la compo).
     prompt = _tile_prompt(prompt)
     if not (prompt or "").strip():
-        _log("refine tiled: prompt vide par tuile (anti-duplication; regle refine_tile_prompt).")
+        _log("refine tiled: empty prompt per tile (anti-duplication; rule refine_tile_prompt).")
     # Anti-duplication 2 (filet): a fort denoise chaque tuile peut encore deriver.
     denoise = float(denoise)
     if _TILE_DENOISE_CAP > 0 and denoise > _TILE_DENOISE_CAP:
