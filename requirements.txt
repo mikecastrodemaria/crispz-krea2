@@ -12,11 +12,14 @@
 # install.bat, et verifier que `transformers` s'installe encore.
 git+https://github.com/huggingface/diffusers@ed58810cb940e4e38e3d730b4b9c75d4db39cd4f
 
-# transformers >= 4.51 requis : Z-Image Turbo utilise un encodeur Qwen3 (Qwen3Model),
-# absent avant 4.51 (echec "module transformers has no attribute Qwen3Model").
-# Borne <5 : la ligne 5.x a des changements d'API qui peuvent casser le diffusers
-# source. Rester sur 4.51+ (teste OK en 4.57).
-transformers>=4.51,<5
+# transformers 5.x, and not out of taste: the diffusers commit above is the one that
+# carries Krea2Pipeline, and it requires huggingface-hub>=1.23 - which transformers<5
+# forbids (it requires <1.0). The `<5` bound the other forks carry therefore made this
+# file, and requirements-lock.txt with it, impossible to resolve: `pip install` ended
+# in ResolutionImpossible on a clean machine and on the CI runner, for everyone.
+# Measured on the dev venv that actually runs Krea 2: transformers 5.14, hf-hub 1.24.
+# Keep >=5: an older transformers pulls hf-hub <1.0 and the conflict comes straight back.
+transformers>=5.0,<6
 accelerate
 sentencepiece
 spandrel
