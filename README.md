@@ -1359,10 +1359,17 @@ instance answers (night batch; `--local`/`--remote URL` force a route).
 Ops: `gen`, `upscale` (`input` + `factor`/`denoise`; **`factor` 1 = pure img2img
 variation, no ESRGAN stage**), `edit` (image + instruction; needs an edit
 model - see `caps.supports.edit`), `inpaint` (image + mask + local
-prompt: only the white area is redrawn, every engine). A broken `config.txt` (invalid JSON, e.g.
+prompt: only the white area is redrawn). Krea 2 has neither an
+img2img nor an inpaint pipeline: `inpaint`, and `upscale` with `factor` 1, are
+refused with exit 3 (`caps.supports.inpaint` / `.img2img`), never faked.
+A broken `config.txt` (invalid JSON, e.g.
 single backslashes in a Windows path) is reported loudly at startup instead
 of silently falling back to the sample.
 `czp caps` prints capabilities and whether an instance is running. Exit codes:
 0 ok / 1 run error / 2 bad spec / 3 unsupported op or protocol / 4 no route.
+Every op of the v1 vocabulary (`caps`, `gen`, `upscale`, `edit`, `inpaint`) always
+answers in JSON: one a family tool does not implement comes back as code 3 with the
+reason, never as a usage dump on stderr - `caps.ops` lists the ops this build
+implements, `caps.supports` what its engine can actually do.
 Config `cli_protocol.instance_url`. Contract + client reference:
 the comics2crispz repo (`docs/CLI_PROTOCOL.md`).
