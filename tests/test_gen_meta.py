@@ -1,21 +1,22 @@
-"""Metadonnees de generation: elles doivent decrire l'image, pas l'intention.
+"""The generation metadata: it must describe the image, not the intention.
 
-Deux trous, du meme genre -- une image qu'on ne peut pas reproduire depuis son propre
-fichier, ou pire, qui affirme quelque chose de faux:
+Two holes, of the same kind -- an image that cannot be reproduced from its own
+file, or worse, that asserts something false:
 
-1. LA LISTE ETAIT CELLE DES LoRA DEMANDEES, pas des LoRA posees (LORAS, pas
-   _APPLIED_LORAS). Une LoRA peut etre ecartee en route -- fichier absent, format
-   refuse -- et signer une image avec une LoRA qu'elle ne porte pas est un mensonge
-   tranquille.
-   Et une LoKr, fusionnee dans les poids, n'apparait dans AUCUN adaptateur PEFT:
-   sans _APPLIED_LOKRS elle disparaissait des metadonnees.
-2. LE REPO DE BASE manquait des qu'un single-file etait choisi. Un single-file ne
-   remplace que le transformer: le VAE, l'encodeur texte et la config d'architecture
-   viennent du repo, donc `model` seul ne reproduit rien.
+1. THE LIST WAS THE ONE OF THE LoRAs ASKED FOR, not of the LoRAs applied (LORAS, not
+   _APPLIED_LORAS). A LoRA can be discarded along the way -- a missing file, a refused
+   format -- and signing an image with a LoRA it does not carry is a quiet
+   lie.
+   And a LoKr, merged into the weights, appears in NO PEFT adapter:
+   without _APPLIED_LOKRS it disappeared from the metadata.
+2. THE BASE REPO was missing as soon as a single-file was chosen. A single-file only
+   replaces the transformer: the VAE, the text encoder and the architecture config
+   come from the repo, so `model` alone reproduces nothing.
 
-Porte depuis crispz-klein 1.31.0.
+Ported from crispz-klein 1.31.0.
 
 Run:  .venv/Scripts/python tests/test_gen_meta.py
+
 """
 import os
 import sys
@@ -78,7 +79,7 @@ def test_the_base_repo_alone_needs_no_second_line():
 
 
 def test_the_a1111_chunk_carries_them_too():
-    """C'est la ligne que lisent Civitai et les visionneuses A1111."""
+    """That is the line Civitai and the A1111 viewers read."""
     old = _state(ZIMAGE_TRANSFORMER=CKPT,
                  _APPLIED_LORAS=[("/l/style.safetensors", 0.8)])
     try:
@@ -91,8 +92,8 @@ def test_the_a1111_chunk_carries_them_too():
 
 
 def test_a_lokr_appears_although_it_is_no_adapter():
-    """Fusionnee dans les poids, elle n'est dans aucun adaptateur PEFT: sans
-    _APPLIED_LOKRS elle disparaissait purement des metadonnees."""
+    """Merged into the weights, it is in no PEFT adapter: without
+    _APPLIED_LOKRS it disappeared from the metadata outright."""
     old = _state(_APPLIED_LOKRS=[("/l/snofs_krea_v1_4.safetensors", 1.0)])
     try:
         m = P._gen_meta("txt2img", "p")
@@ -103,11 +104,11 @@ def test_a_lokr_appears_although_it_is_no_adapter():
 
 
 # ---------------------------------------------------------------------------
-# L'image d'ENTREE (porte depuis crispz-klein 1.32.0). Une seule des quatre sorties la
-# nommait: le lot (basename en dur), pas l'img2img simple, pas l'inpaint, et l'edition
-# n'ecrivait que le NOMBRE de references. Nom par defaut, pas chemin: le PNG voyage, et
-# Gradio depose les envois dans un dossier temporaire dont seul le nom de base porte le
-# nom d'origine.
+# The INPUT image (ported from crispz-klein 1.32.0). Only one of the four outputs
+# named it: the batch (a hardcoded basename), not the plain img2img, not the inpaint, and
+# the edit only wrote the NUMBER of references. The default name, not the path: the PNG
+# travels, and Gradio drops the uploads into a temporary folder where only the base name
+# carries the original name.
 # ---------------------------------------------------------------------------
 
 # Full input paths: os.path.join keeps the separator of the running OS, and

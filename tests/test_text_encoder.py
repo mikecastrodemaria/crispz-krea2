@@ -1,27 +1,28 @@
-"""Encodeur texte de remplacement (Models > Checkpoints > Text encoder).
+"""A replacement text encoder (Models > Checkpoints > Text encoder).
 
-Porte depuis crispz-klein 1.34.0. Krea 2 lit DOUZE etats caches de l'encodeur Qwen3-VL a
-des indices FIXES (text_encoder_select_layers = 2, 5, ..., 35, autant que
-transformer.config.num_text_layers), larges de 2560: un autre encodeur ne se branche que
-s'il a la meme famille (qwen3_vl), la meme largeur et le meme nombre de couches. Moins
-de couches: les indices debordent au premier prompt. Plus: le transformer lit d'autres
-profondeurs que celles de son entrainement, sans erreur. Le refus doit le dire AVANT de
-lire 8 Go.
+Ported from crispz-klein 1.34.0. Krea 2 reads TWELVE hidden states of the Qwen3-VL encoder at
+FIXED indices (text_encoder_select_layers = 2, 5, ..., 35, as many as
+transformer.config.num_text_layers), 2560 wide: another encoder only plugs in when
+it has the same family (qwen3_vl), the same width and the same number of layers. Fewer
+layers: the indices overflow on the first prompt. More: the transformer reads other
+depths than the ones it was trained on, with no error. The refusal must say so BEFORE
+reading 8 GB.
 
-Ces tests verrouillent aussi ce qui rendrait l'option dangereuse en silence:
-  - un changement d'encodeur vide le cache d'embeddings (sinon les anciens encodages
-    restent servis) et l'encodeur fait partie de la CLE du cache -- id(enc) seul ne
-    suffit pas, CPython recycle les id d'objets liberes;
-  - un encodeur ecarte, ou qui echoue au chargement, ne coute jamais un rendu:
-    _ensure_base retombe sur celui du repo de base, et les metadonnees le disent;
-  - les metadonnees nomment l'encodeur qui a REELLEMENT tourne, par son nom de dossier
-    et jamais par son chemin (qui finirait dans les PNG partages);
-  - la file garde l'encodeur du job.
+These tests also lock down what would make the option silently dangerous:
+  - a change of encoder empties the embeddings cache (otherwise the old encodings
+    stay served) and the encoder is part of the cache KEY -- id(enc) alone is not
+    enough, CPython recycles the ids of freed objects;
+  - an encoder discarded, or that fails to load, never costs a render:
+    _ensure_base falls back on the base repo's, and the metadata says so;
+  - the metadata names the encoder that REALLY ran, by its folder name
+    and never by its path (which would end up in the shared PNGs);
+  - the queue keeps the job's encoder.
 
-Aucun modele charge, aucun reseau: la config de l'encodeur du repo de base est remplacee,
-et Krea2Pipeline comme la classe de l'encodeur sont des faux.
+No model loaded, no network: the base repo's encoder config is replaced,
+and both Krea2Pipeline and the encoder's class are fakes.
 
 Run:  .venv/Scripts/python tests/test_text_encoder.py
+
 """
 import json
 import os
@@ -36,8 +37,8 @@ import torch
 import cz_imageio
 import cz_pipeline as P
 
-# Encodeur de krea/Krea-2-Turbo (et -Raw): la partie texte est rangee sous text_config,
-# la vision (1024 de large) ne compte pas.
+# The encoder of krea/Krea-2-Turbo (and -Raw): the text part is kept under text_config,
+# the vision one (1024 wide) does not count.
 QWEN3VL_4B = {"model_type": "qwen3_vl", "architectures": ["Qwen3VLModel"],
               "text_config": {"model_type": "qwen3_vl_text", "hidden_size": 2560,
                               "num_hidden_layers": 36},
@@ -62,7 +63,7 @@ def _folder(cfg, sub=None, name="enc"):
 
 
 class _Base:
-    """Remplace la config de l'encodeur du repo de base (pas de reseau, pas de HF)."""
+    """Replaces the encoder config of the base repo (no network, no HF)."""
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -76,7 +77,7 @@ class _Base:
 
 
 class _FakeEncoderClass:
-    """Classe d'encodeur factice: retient ce que from_pretrained recoit, ou echoue."""
+    """A dummy encoder class: it remembers what from_pretrained receives, or fails."""
     calls = []
     boom = None
 
@@ -97,7 +98,7 @@ def test_dims_are_read_under_text_config():
 def test_same_architecture_is_accepted():
     with _Base(QWEN3VL_4B):
         assert P._text_encoder_problem(_folder(QWEN3VL_4B)) is None
-        # poids dans un sous-dossier text_encoder/ (copie d'un repo diffusers)
+        # weights in a text_encoder/ subfolder (a copy of a diffusers repo)
         assert P._text_encoder_problem(_folder(QWEN3VL_4B, "text_encoder")) is None
     print("OK test_same_architecture_is_accepted")
 
@@ -110,8 +111,8 @@ def test_another_width_is_refused_with_both_numbers():
 
 
 def test_the_layer_count_is_checked_both_ways():
-    """Indices FIXES jusqu'a 35: moins de couches deborde, plus lit d'autres
-    profondeurs sans erreur. Les deux sont refuses, nombres a l'appui."""
+    """FIXED indices up to 35: fewer layers overflows, more reads other
+    depths with no error. Both are refused, with the numbers to back it."""
     with _Base(QWEN3VL_4B):
         for n in (28, 40):
             why = P._text_encoder_problem(_folder(_layers(n)))
@@ -120,7 +121,7 @@ def test_the_layer_count_is_checked_both_ways():
 
 
 def test_a_text_only_qwen3_is_refused_by_family():
-    """Meme largeur, meme profondeur, autre architecture: la famille suffit."""
+    """The same width, the same depth, another architecture: the family is enough."""
     with _Base(QWEN3VL_4B):
         why = P._text_encoder_problem(_folder(QWEN3_4B_TEXT))
     assert why and "'qwen3'" in why and "qwen3_vl" in why, why
@@ -136,7 +137,7 @@ def test_gguf_single_file_and_empty_folder_are_refused_with_the_reason():
 
 
 def test_an_unreadable_base_config_leaves_it_to_the_load():
-    """Rien a comparer: pas de refus, le chargement tranchera (et retombera au besoin)."""
+    """Nothing to compare: no refusal, the loading will settle it (and fall back when needed)."""
     with _Base(None):
         assert P._text_encoder_problem(_folder(QWEN3VL_8B)) is None
     print("OK test_an_unreadable_base_config_leaves_it_to_the_load")
@@ -150,9 +151,9 @@ def test_hf_ids_may_carry_a_subfolder():
 
 
 def test_the_class_comes_from_the_base_repo_model_index():
-    """La classe est celle que diffusers aurait chargee, lue dans model_index.json
-    (Qwen3VLModel chez Krea 2). Module factice: importer la vraie classe transformers
-    tire torchao, qui plante sans GPU visible."""
+    """The class is the one diffusers would have loaded, read from model_index.json
+    (Qwen3VLModel on Krea 2). A dummy module: importing the real transformers class
+    pulls torchao, which crashes with no visible GPU."""
     mod = types.ModuleType("_fake_te_lib")
 
     class Qwen3VLModel:
@@ -167,7 +168,7 @@ def test_the_class_comes_from_the_base_repo_model_index():
             json.dump({"_class_name": "Krea2Pipeline",
                        "text_encoder": ["_fake_te_lib", "Qwen3VLModel"]}, f)
         assert P._encoder_class(base) is Qwen3VLModel
-        # model_index sans text_encoder: erreur nommee, pas un KeyError nu
+        # a model_index with no text_encoder: a named error, not a bare KeyError
         with open(idx, "w", encoding="utf-8") as f:
             json.dump({"_class_name": "Krea2Pipeline"}, f)
         try:
@@ -182,7 +183,7 @@ def test_the_class_comes_from_the_base_repo_model_index():
 
 
 def test_the_encoder_loads_in_bf16_from_its_subfolder():
-    """DTYPE et le sous-dossier, rien d'autre: torchao ne touche que le transformer."""
+    """DTYPE and the subfolder, nothing else: torchao only touches the transformer."""
     d = _folder(QWEN3VL_4B, "text_encoder")
     old = P._encoder_class
     _FakeEncoderClass.calls, _FakeEncoderClass.boom = [], None
@@ -209,7 +210,7 @@ def test_changing_the_encoder_frees_the_pipe_and_the_cache():
         assert P._BASE_PIPE is None, "le pipeline doit etre libere"
         assert not P._EMBED_CACHE, "les anciens encodages resteraient servis"
         assert P._TEXT_ENCODER_ACTIVE == "", "plus de pipe -> plus d'encodeur charge"
-        # meme valeur: rien ne bouge, pas de rechargement inutile
+        # the same value: nothing moves, no pointless reload
         sentinel = P._BASE_PIPE = object()
         P.set_text_encoder(r"D:\enc\qwen3-vl-abl")
         assert P._BASE_PIPE is sentinel
@@ -231,7 +232,7 @@ class FakePipe:
 
 
 def test_the_embed_key_carries_the_encoder():
-    """Meme prompt, meme objet pipe, deux encodeurs: deux encodages."""
+    """The same prompt, the same pipe object, two encoders: two encodings."""
     P._embed_cache_clear()
     old = (P._TEXT_ENCODER_ACTIVE, P._EMBED_CACHE_MAX)
     try:
@@ -259,14 +260,14 @@ def test_metadata_names_the_encoder_that_ran_and_never_its_path():
         m = P._gen_meta("txt2img", "p")
         assert m["text_encoder"] == "qwen3-vl-4b-abliterated", m
         assert "someone" not in json.dumps(m), "chemin local dans les metadonnees"
-        # independant du transformer override (qui seul fait ecrire base_repo)
+        # independent of the transformer override (which alone makes base_repo written)
         assert "base_repo" not in m, m
         P.ZIMAGE_TRANSFORMER = r"F:\models\un_checkpoint.safetensors"
         m = P._gen_meta("txt2img", "p")
         assert m["text_encoder"] == "qwen3-vl-4b-abliterated", m
         assert m["base_repo"] == P.BASE_REPO, m
         P.ZIMAGE_TRANSFORMER = None
-        # demande mais ecarte au chargement: nomme a part
+        # asked for but discarded at load time: named apart
         P._TEXT_ENCODER_ACTIVE = ""
         m = P._gen_meta("txt2img", "p")
         assert "text_encoder" not in m, m
@@ -309,7 +310,7 @@ def test_the_queue_keeps_the_encoder():
         P.set_text_encoder = lambda s: calls.append(s)
         U._q_restore_model_state(ms)
         assert calls == [r"D:\enc\qwen3-vl-abl"], calls
-        # snapshot d'avant l'option: on ne touche pas a l'encodeur courant
+        # a snapshot from before the option: we do not touch the current encoder
         calls.clear()
         U._q_restore_model_state({k: v for k, v in ms.items() if k != "text_encoder"})
         assert calls == [], calls
@@ -319,8 +320,8 @@ def test_the_queue_keeps_the_encoder():
 
 
 def test_the_ui_persists_only_a_valid_encoder():
-    """Refus nomme: rien de change, rien d'ecrit dans preferences.json. Sinon applique et
-    memorise. _save_prefs_keys est remplace: aucun fichier du depot n'est touche."""
+    """A named refusal: nothing changed, nothing written to preferences.json. Otherwise applied and
+    remembered. _save_prefs_keys is stubbed: no file of the repo is touched."""
     import cz_ui as U
     saved, applied = [], []
     old = (U._save_prefs_keys, P.set_text_encoder, P.TEXT_ENCODER)
@@ -336,7 +337,7 @@ def test_the_ui_persists_only_a_valid_encoder():
             msg = U._ui_set_text_encoder(ok)
             assert "qwen3-vl-4b-abliterated" in msg, msg
             assert applied == [ok] and saved == [{"text_encoder": ok}], (applied, saved)
-            # retour au defaut: applique et memorise aussi
+            # back to the default: applied and remembered too
             U._ui_set_text_encoder("")
             assert applied[-1] == "" and saved[-1] == {"text_encoder": ""}, (applied, saved)
     finally:
@@ -344,16 +345,16 @@ def test_the_ui_persists_only_a_valid_encoder():
     print("OK test_the_ui_persists_only_a_valid_encoder")
 
 
-# --- _ensure_base: l'encodeur arrive dans from_pretrained, ou le repli ---------------
+# --- _ensure_base: the encoder arrives in from_pretrained, or the fallback ------------
 
 class FakeKrea2Pipeline:
-    """Krea2Pipeline factice: retient les kwargs de from_pretrained."""
+    """A dummy Krea2Pipeline: it remembers from_pretrained's kwargs."""
     last = None
 
     def __init__(self, kw):
         self.transformer = kw.get("transformer")
         self.text_encoder = kw.get("text_encoder", "BASE_ENCODER")
-        self.scheduler = object()      # pas de .config -> _apply_sampler ne fait rien
+        self.scheduler = object()      # no .config -> _apply_sampler does nothing
         self.vae = types.SimpleNamespace(config=types.SimpleNamespace(),
                                          enable_slicing=lambda: None,
                                          enable_tiling=lambda: None)
@@ -374,7 +375,7 @@ _ENSURE_STATE = ("TEXT_ENCODER", "_TEXT_ENCODER_ACTIVE", "_BASE_PIPE", "_DERIVED
 
 
 def _run_ensure_base(src, base_cfg, boom=None):
-    """_ensure_base sur un faux pipeline: (pipe, (repo, kwargs), actif, metadonnees)."""
+    """_ensure_base on a fake pipeline: (pipe, (repo, kwargs), the active one, the metadata)."""
     import diffusers
     had = "Krea2Pipeline" in vars(diffusers)
     old_attr = vars(diffusers).get("Krea2Pipeline")
@@ -414,8 +415,8 @@ def test_ensure_base_hands_the_encoder_to_from_pretrained():
 
 
 def test_a_misfit_or_failing_encoder_falls_back_to_the_base_one():
-    """Jamais un rendu perdu pour un encodeur: refuse a la config (sans lire les poids)
-    ou en echec au chargement, _ensure_base charge celui du repo de base et le dit."""
+    """Never a render lost for an encoder: refused at the config (without reading the weights)
+    or failing at load time, _ensure_base loads the base repo's and says so."""
     for src, boom in ((_folder(QWEN3VL_8B, name="qwen3-vl-8b"), None),
                       (_folder(QWEN3VL_4B, name="qwen3-vl-broken"), OSError("truncated shard"))):
         pipe, (repo, kw), active, meta = _run_ensure_base(src, QWEN3VL_4B, boom=boom)
@@ -426,7 +427,7 @@ def test_a_misfit_or_failing_encoder_falls_back_to_the_base_one():
         assert meta["text_encoder_not_applied"] == os.path.basename(src), meta
         if boom is None:
             assert not _FakeEncoderClass.calls, "refuse a la config: aucun poids lu"
-    # sans encodeur de remplacement, rien ne change
+    # with no replacement encoder, nothing changes
     pipe, (repo, kw), active, meta = _run_ensure_base("", QWEN3VL_4B)
     assert "text_encoder" not in kw and active == "", kw
     assert "text_encoder" not in meta and "text_encoder_not_applied" not in meta, meta
@@ -435,8 +436,8 @@ def test_a_misfit_or_failing_encoder_falls_back_to_the_base_one():
 
 
 def test_default_picked_in_the_ui_survives_a_restart():
-    """Choisir "Default" ecrit "" dans les preferences: au redemarrage, une valeur de
-    config.txt ne doit pas revenir par-dessus. L'environnement gagne toujours."""
+    """Choosing "Default" writes "" into the preferences: on a restart, a value from
+    config.txt must not come back over it. The environment always wins."""
     cfg = {"text_encoder": r"D:\enc\from-config"}
     assert P._resolve_text_encoder({}, {}, cfg) == r"D:\enc\from-config"
     assert P._resolve_text_encoder({}, {"text_encoder": ""}, cfg) == ""
@@ -447,8 +448,8 @@ def test_default_picked_in_the_ui_survives_a_restart():
 
 
 def test_compatible_encoders_in_the_hf_cache_are_listed():
-    """Un encodeur telecharge depuis HF vit dans le cache HF: la liste doit le montrer.
-    Pas un pipeline diffusers, pas une config sans poids; une autre taille est nommee a cote."""
+    """An encoder downloaded from HF lives in the HF cache: the list must show it.
+    Not a diffusers pipeline, not a config with no weights; another size is named next to it."""
     import json as _json
     import os as _os
     import tempfile as _tempfile

@@ -31,8 +31,8 @@ def test_mode_setter_normalises():
 
 
 def test_extend_raises_unsupported():
-    # Krea 2 n'a pas de pipeline inpaint: l'extend doit echouer avec le message
-    # UnsupportedFeature clair, pas un crash obscur.
+    # Krea 2 has no inpaint pipeline: the extend must fail with the clear
+    # UnsupportedFeature message, not an obscure crash.
     raised = False
     try:
         czp._extend_to_ratio(Image.new("RGB", (512, 768)), 16, 9, "", 6, 1)
