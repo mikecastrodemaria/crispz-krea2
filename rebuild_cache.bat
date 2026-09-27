@@ -1,7 +1,7 @@
 @echo off
-rem Reconstruit le cache de conversion des checkpoints Civitai (single-file).
-rem Relancable a volonte: ce qui est deja converti est saute en une seconde.
-rem Option: rebuild_cache.bat --cpu  (dequantification sans toucher au GPU)
+rem Rebuilds the conversion cache of the Civitai checkpoints (single-file).
+rem Re-runnable at will: whatever is already converted is skipped in a second.
+rem Option: rebuild_cache.bat --cpu  (dequantises without touching the GPU)
 cd /d "%~dp0"
 set PYTHONUTF8=1
 .venv\Scripts\python.exe tools\rebuild_convert_cache.py %*
