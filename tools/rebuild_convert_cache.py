@@ -1,21 +1,22 @@
-"""Reconstruit le cache de conversion (cache/krea2_convert) pour TOUS les
-checkpoints single-file du dossier de modeles.
+"""Rebuilds the conversion cache (cache/krea2_convert) for ALL the single-file
+checkpoints of the model folder.
 
 Usage:
     .venv/Scripts/python tools/rebuild_convert_cache.py [--list] [--cpu]
-    (ou double-clic sur rebuild_cache.bat a la racine)
+    (or double-click on rebuild_cache.bat at the root)
 
-- REPRISE GRATUITE: un checkpoint deja converti (cache a jour) est saute en
-  une seconde -> relancable a volonte, y compris apres une coupure.
-- --list : montre ce qui serait fait, sans rien convertir.
-- --cpu  : force la dequantification FP8/INT8 sur CPU (par defaut: GPU si
-  libre - la dequant prend ~1 Go de VRAM par tenseur, mais si un rendu tourne
-  en meme temps, prefere --cpu ou attends).
-- Duree indicative: ~15 min par BF16 (borne par le disque des modeles),
-  ~2-3 min par FP8/INT8/GGUF avec la dequant GPU.
-- Verifie que convert_cache_max_gb (config.txt) couvre le total (~26 Go par
-  checkpoint), sinon les premieres conversions seraient evincees par les
-  dernieres.
+- RESUMING IS FREE: a checkpoint already converted (an up-to-date cache) is skipped
+  in a second -> re-runnable at will, including after an interruption.
+- --list : shows what would be done, without converting anything.
+- --cpu  : forces the FP8/INT8 dequantisation onto the CPU (by default: the GPU when
+  it is free - the dequant takes ~1 GB of VRAM per tensor, but when a render is
+  running at the same time, prefer --cpu or wait).
+- An indicative duration: ~15 min per BF16 (bounded by the models' disk),
+  ~2-3 min per FP8/INT8/GGUF with the GPU dequant.
+- It checks that convert_cache_max_gb (config.txt) covers the total (~26 GB per
+  checkpoint), otherwise the first conversions would be evicted by the
+  last ones.
+
 """
 import os
 import sys
@@ -70,7 +71,7 @@ if "--list" in sys.argv:
             root = czp._convert_cache_dir()
             done = "?"
             if root:
-                # meme calcul de cle que _converted_folder, sans convertir
+                # the same key computation as _converted_folder, without converting
                 import hashlib
                 import re
                 st = os.stat(p)
