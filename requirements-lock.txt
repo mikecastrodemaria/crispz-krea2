@@ -43,8 +43,13 @@ huggingface-hub==1.24.0
 peft==0.19.1
 sentencepiece==0.2.2
 spandrel==0.4.1
-# no 'gguf' here: crispz-studio has no GGUF loading path
-# (unlike the krea / qwen-edit forks).
+# gguf: crispz-krea2 DOES have a GGUF path. cz_pipeline imports the package directly
+# (_read_gguf_state_dict -> gguf.quants.dequantize): a ComfyUI-GGUF .gguf is listed by
+# list_checkpoints(), dequantized to bf16 and converted like a single file. The comment
+# inherited here said the opposite ("crispz-studio has no GGUF loading path") and the
+# package was missing from the lock: an ISOLATED install therefore produced a venv with no
+# gguf, where selecting a .gguf dies on the import. Same fix as crispz-klein on 2026-09-05.
+gguf==0.19.0
 
 # UI / service
 gradio==5.50.0
