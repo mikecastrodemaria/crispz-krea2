@@ -10,14 +10,14 @@
 A standalone Krea 2 **creation** tool, **100% local**, no ComfyUI /
 SwarmUI. On top of crispz's upscaler it adds:
 
-- **Text → Image** (`ZImagePipeline`): generate from a prompt, with an optional
+- **Text → Image** (`Krea2Pipeline`): generate from a prompt, with an optional
   **Upscale after generate** toggle (under the Generate button) that auto-chains each
-  image — txt2img or Reference (Omni) — through the ESRGAN + refine pipeline, no manual
-  step. CLI equivalent:
+  image through the ESRGAN upscale, no manual step. CLI equivalent:
   `--txt2img --upscale` (see README_CLI.md).
-- **Image → Upscale** (the crispz pipeline): Real-ESRGAN + Z-Image refine, 4K tiling —
-  plus one-click **🎲 Vary (subtle / strong)** (pure img2img re-roll of an input image,
-  denoise 0.25 / 0.6, Fooocus-style).
+- **Image → Upscale** (the crispz pipeline): Real-ESRGAN, 4K tiling. **No diffusion
+  refine here, and no 🎲 Vary**: diffusers has no `Krea2Img2ImgPipeline`, so the refine
+  controls are hidden and the denoise is forced to 0 — the upscale is a pure ESRGAN
+  enlargement. The family's img2img features live in the other forks.
 - **Job queue**: `+ Queue` snapshots ALL current settings (incl. model, LoRAs, sampler)
   into a labeled job list; `Run queue` chains them unattended (overnight batches with
   different models/settings). **⏸ Pause finishes the current job then halts**;
@@ -36,23 +36,18 @@ SwarmUI. On top of crispz's upscaler it adds:
   CSVs (downloaded once into `tags/`; drop any `.csv` there to add a source) merged with
   your local `__wildcards__`. Dropdown under the caret, ↑/↓ + Tab/Enter, Escape;
   popularity-ranked, indexed (~sub-ms per keystroke).
-- **Inpaint / Outpaint** (one tab, 3 modes): **Brush** repaints a painted mask ·
-  **Expand sides** outpaints Left/Right/Top/Bottom (+ **Center**) ~30% per side ·
-  **Reframe** to a new aspect ratio (**Contain** = keep the whole image and fill the
-  borders, **Cover** = crop to fill). All bounded to the model's ~1 MP sweet spot (no
-  pixel blow-up), with blurred-edge fill + feathered seams for clean blends, an optional
-  **Auto-describe** (local captioner, no Ollama, automatic when the prompt is empty) to
-  guide coherent fills, and an optional **Harmonize** pass (light img2img refine over the
-  whole result) to unify grain/light and remove the "added zone" look. Steps follow the
-  model.
+- **Inpaint / Outpaint / Reframe: absent from Krea 2.** diffusers has no
+  `Krea2InpaintPipeline`, so the whole tab (Brush, Expand sides, Reframe-Contain) has no
+  engine and is hidden rather than shown-then-failing. Reframe-**Cover** (a centre crop)
+  still works, since it is pure geometry. The three modes work in crispz-studio,
+  crispz-krea, crispz-qwen-edit and crispz-klein.
 - **Remove Background** (rembg) and **Face Swap** with optional **GFPGAN restore**.
-- **🔧 Auto face detailer** (ADetailer-style): tick *Detail faces* under Generate — after
-  each render (and upscale), faces are detected and each is re-refined at high resolution
-  (enlarged crop → Z-Image img2img → feathered paste). Denoise slider in Advanced;
-  `face_detailer*` config keys.
-- **Models**: one **Z-Image checkpoint** dropdown merging the official base repos
-  (Turbo / Z-Image) with single-file `.safetensors` from a main **and** an optional
-  extra folder, a **Transformer override** (diffusers repo/folder, e.g. Juggernaut-Z),
+- **🔧 Auto face detailer: absent from Krea 2.** The detailer re-refines every face in
+  img2img, which needs the pipeline Krea 2 does not have, so the box is hidden.
+  `face_detailer*` stays in `config.txt` for the forks that share this code.
+- **Models**: one **Krea 2 model** dropdown merging the official base repos
+  (Turbo / Raw) with single-file `.safetensors` from a main **and** an optional
+  extra folder, a **Transformer override** (a diffusers repo/folder),
   and **multi-LoRA** (configurable **1–10 slots** + trigger words). Picking a model also
   auto-syncs the Performance preset. NB Krea 2: diffusers has no `from_single_file`
   for `Krea2Transformer2DModel`, so Civitai `.safetensors` load through **our own
@@ -112,13 +107,13 @@ SwarmUI. On top of crispz's upscaler it adds:
   bar: real `Hashing… %` when the file must be hashed, then Querying / Downloading) with an
   inline ✅/⚠️ result. **Example images are clickable** → a full-screen viewer shows each
   example **large with its generation prompt** (Copy prompt) and **← / →** to browse. A small
-  **🖼️ icon** next to each **LoRA** dropdown and the **Z-Image checkpoint** dropdown
+  **🖼️ icon** next to each **LoRA** dropdown and the **Krea 2 model** dropdown
   (Advanced) opens the Asset Browser **straight to that model's card** (its preview /
   trigger words / examples). A **🔄 Fetch all missing** button (LoRAs / Models tabs)
   enriches the whole folder in one go (same as the standalone `civitai_index.bat` /
   `.sh` — see below); models with a **newer version on CivitAI** get a **⚠ update** badge.
   The badge only counts versions published for the **same base model**:
-  a LoRA whose page gains a Z-Image or FLUX release is not an update for your
+  a LoRA whose page gains a Z-Image or FLUX release is not an update for your Krea 2
   Krea 2 copy.
   A **🖼 Rebuild ALL thumbnails (force)** button re-generates every thumbnail of the
   current tab from scratch (parallel, live progress) — for when a thumbnail is corrupt or
@@ -132,8 +127,9 @@ SwarmUI. On top of crispz's upscaler it adds:
   style names**, and the **sampler/schedule**. **Dated, unique filenames** (date +
   tag + seed + size).
 - **`config.txt`** for all defaults + the Ollama instruction strings.
-- **Reference (Omni)** native multi-image compose: code ready, UI hidden until the
-  Z-Image Omni/Edit model ships.
+- **Reference (Omni)**: absent from Krea 2 — there is no instruction-based editing
+  pipeline for this model family, so the tab never shows. It is klein's home ground
+  (multi-reference is native there).
 
 Tabbed Gradio UI + scriptable CLI + persistent server (`--serve`).
 
@@ -173,11 +169,11 @@ name/port) — this file is **gitignored**, never committed. Copy
 `CF_TUNNEL` empty for an ephemeral `*.trycloudflare.com` quick tunnel (no personal
 config). Needs `cloudflared` (`winget install --id Cloudflare.cloudflared`).
 
-> Roadmap status: **Phase 3** (FaceSwap) is implemented and works. **Phase 2**
-> (Omni multi-reference) is coded but **its UI stays hidden** until a Z-Image
-> Omni/Edit model is released (none yet) — use **img2img** for a reference image
-> in the meantime. ControlNet / Inpaint are next. See the parent crispz repo for
-> the upscale internals.
+> Roadmap status: **Phase 3** (FaceSwap) is implemented and works. Omni
+> multi-reference, img2img and inpaint are **not** on this fork's roadmap: the
+> pipelines do not exist for Krea 2 in diffusers. For a reference image, use
+> crispz-klein (native multi-reference) or crispz-studio / crispz-krea (img2img).
+> See the parent crispz repo for the upscale internals.
 
 ## Configuration (`config.txt`)
 
@@ -248,8 +244,8 @@ prompts, the Omni / FaceSwap model paths, etc.).
   `negative_instruction`, `default_negative`, `format`. A custom `ollama_improve_prompt`
   is still honored. The Ollama transport uses `127.0.0.1` (a `localhost` URL is
   rewritten) and ignores system proxy variables.
-- **Caption model** (Prompt AI): the Describe fallback and the **Auto-describe** toggle
-  in Inpaint / Outpaint. `blip-large` (default, richer) · `blip-base` (lighter), local,
+- **Caption model** (Prompt AI): the Describe fallback (the Auto-describe toggle it also
+  serves belongs to the Inpaint / Outpaint tab, hidden on Krea 2). `blip-large` (default, richer) · `blip-base` (lighter), local,
   downloaded on first use — or `ollama:<model>`, one of your Ollama vision models (listed
   once Ollama is detected): pick a small one, it runs right before the image model; BLIP
   takes over if Ollama fails. Set by `caption_model` in `config.txt` too.
@@ -259,9 +255,10 @@ prompts, the Omni / FaceSwap model paths, etc.).
 
 ## Using a reference image (multi-reference status)
 
-**Available now — img2img.** To guide generation with a reference image, use
-**Input Image → Upscale or img2img** (uncheck "ESRGAN upscale" for a pure
-img2img refine). One reference image + your prompt.
+**Not available on Krea 2 — img2img.** There is no `Krea2Img2ImgPipeline` in
+diffusers, so a reference image cannot guide the diffusion here: the Upscale tab
+enlarges with ESRGAN only. For a true img2img, use crispz-studio, crispz-krea or
+crispz-qwen-edit; for multi-reference, crispz-klein.
 
 **Available now — Vision Mix.** Input Image → **Vision Mix** tab: drop up to 4
 references, then either *"Vision Mix → prompt"* (fills the prompt) or
@@ -274,26 +271,26 @@ Advanced → Prompt AI. The merge instruction is `ollama_compose_prompt`, and
 true Omni model, kept for later, will do).
 
 **Multi-reference compose (person + outfit, etc.)** needs a model that can read
-several reference images. The options and their status for Z-Image:
+several reference images. The state of play for Krea 2:
 
-| Approach | Status for Z-Image |
+| Approach | Status for Krea 2 |
 |---|---|
-| **Omni** (`ZImageOmniPipeline`, native multi-ref) | code ready; **model not released** (Z-Image-Omni-Base / Z-Image-Edit "coming soon") |
-| **ControlNet** (`ZImageControlNetPipeline`) | pipeline exists; **no Z-Image ControlNet model yet** |
-| **IP-Adapter** (what Fooocus uses for image prompts on SDXL) | **none for Z-Image yet** |
+| **Omni / instruction editing** | **no pipeline** in diffusers for this family |
+| **img2img** | **no pipeline** (`Krea2Img2ImgPipeline` does not exist) |
+| **ControlNet** | **no pipeline, no model** |
+| **IP-Adapter** | **none** (an SDXL-family component) |
 
-Fooocus's "Image Prompt / multi-reference" relies on **IP-Adapter + ControlNet**,
-which are SDXL-family components — they don't apply to Z-Image. So for Z-Image the
-only reference path today is **img2img**; true multi-reference waits on the models
-above.
+So on Krea 2 the only image-driven path is **Vision Mix**, which works at the *prompt*
+level: it describes your references and merges them into one text prompt. For pixel-level
+reference, the family's other forks are the place: crispz-klein composes several
+references natively, crispz-studio / crispz-krea / crispz-qwen-edit do img2img.
 
-### Reference (Omni) — hidden until a model exists
+### Reference (Omni) — absent from Krea 2
 
-The **Reference (Omni)** tab is **hidden by default** (no usable model). The code
-is in place: once a Z-Image Omni/Edit model ships, set it in `config.txt`
-(`"zimage_omni_model": "<HF repo or local diffusers folder>"`) **and restart** —
-the tab appears and multi-reference works. Use **Models → Check Omni availability**
-to see if it has been released.
+The **Reference (Omni)** tab never shows on this fork: instruction-based editing has no
+pipeline for Krea 2, so there is nothing to point a model at. The `zimage_omni_model`
+config key and the handlers are still there because the five apps share this code — set
+on Krea 2, they change nothing. Multi-reference editing is crispz-klein's ground.
 
 When it runs, it runs like txt2img: **Image number** makes a batch (each image with
 seed + i, variants and wildcards drawn per image), **Upscale after generate** chains
@@ -403,38 +400,26 @@ fields (from 2 typed characters in the current comma-delimited token).
   `"tag_autocomplete": {"enabled": true, "max_results": 8, "sources": [<urls>]}` —
   `enabled=false` downloads nothing and injects no script (zero cost).
 
-## Inpaint / Outpaint (Advanced tab)
+## Inpaint / Outpaint — absent from Krea 2
 
-One tab with three modes. The image editor, prompt, **Steps** (from the model
-Performance) and **Strength** are shared across modes:
+The tab is hidden on this fork. Brush (inpaint), Expand sides (outpaint) and
+Reframe-**Contain** all need a `Krea2InpaintPipeline`, which diffusers does not have for
+this family; the components are still built so the shared handlers keep working, but they
+are never shown. The CLI and the `czp` protocol refuse the same operations by name
+(`UnsupportedFeature`) instead of failing halfway.
 
-- **Brush (inpaint)** — paint a mask over the area to change, describe the result in the
-  prompt, run. Brush size is set from the editor toolbar (click the brush icon).
-- **Expand sides (outpaint)** — check **Left / Right / Top / Bottom** (or **Center** for
-  all four) to grow the canvas ~30% per side; Z-Image fills the new borders.
-- **Reframe (ratio)** — pick a target aspect ratio + **Contain** (keep the whole image
-  and fill the borders) or **Cover** (crop to fill).
+What still works here: **Reframe-Cover**, a centre crop to a ratio (pure geometry, no
+diffusion), and the **Force aspect ratio** radio in Settings, which offers **Off** and
+**Crop to fit** only.
 
-All modes are bounded to the model's **~1 MP sweet spot** (no pixel blow-up). Border
-fills use a **blurred-edge init + feathered seams** so new content matches the original's
-colors, and the unmasked area keeps its full resolution.
-
-Tips for clean outpaint/reframe:
-
-- **Describe the result** in the prompt (the full outfit/scene). **Auto-describe** runs
-  automatically when the prompt is empty (the caption model: local BLIP, or an Ollama
-  vision model) to keep the fill coherent with the center — or check it to also prepend a description to your prompt.
-- **Strength** ~0.65–0.8 blends best (keeps the edge colors); ~1.0 adds more new detail
-  but a more visible transition.
-- **Harmonize** (checkbox) runs a light final img2img refine over the whole result to
-  unify grain/light and remove any remaining "added zone" look.
-- The caption model is set in **Prompt AI → Caption model** (`blip-large` /
-  `blip-base`, or `ollama:<model>`).
+The three modes, the blurred-edge fill, the feathered seams, Auto-describe and Harmonize
+all work in crispz-studio, crispz-krea, crispz-qwen-edit and crispz-klein — this section
+is documented there.
 
 ## Face Swap — post-process  *(Phase 3, optional)*
 
 Input Image → **Face Swap** tab: a source face + “Apply face swap to result”.
-Works on any mode (txt2img / img2img / omni). The installer sets up the deps by
+Works on the txt2img renders (the only mode here). The installer sets up the deps by
 default (`insightface` + `onnxruntime-gpu`); skip with `install.bat --no-faceswap`,
 or install manually:
 
@@ -484,9 +469,9 @@ fidelity to the swapped pixels) — 0.5–0.7 suits a 128 px swap. GFPGAN ignore
 
 ### Where the swap runs, and what it replaces
 
-The swap is the **last** step of a render. The order is: generation (txt2img, img2img
-or Reference (Omni)) → **Upscale after generate** → face / hand **detailer** → **face
-swap**. It runs on every image of a batch, and each swapped image is saved as its own
+The swap is the **last** step of a render. The order is: generation (txt2img) →
+**Upscale after generate** → face / hand **detailer** (absent on Krea 2, it needs
+img2img) → **face swap**. It runs on every image of a batch, and each swapped image is saved as its own
 file, tagged `faceswap`. Two consequences:
 
 - **Turn the face detailer off when the swap is on.** The detailer re-renders faces at
@@ -523,16 +508,16 @@ python app.py --txt2img --prompt "a serene mountain lake, cinematic" \
     --gen-width 1024 --gen-height 1024 --gen-steps 8 --seed 42 \
     --save-mode local --output-dir out
 
-# Generate then upscale (ESRGAN + Z-Image refine)
+# Generate then upscale (ESRGAN only: Krea 2 has no diffusion refine)
 python app.py --txt2img --prompt "portrait of an old fisherman" --upscale \
-    --factor 2 --denoise 0.30 -m 4x-ClearRealityV1_Soft.safetensors \
+    --factor 2 -m 4x-ClearRealityV1_Soft.safetensors \
     --save-mode local --output-dir out
 ```
 
-In the UI, use the **Text -> Image** tab. Z-Image Turbo runs at `guidance 0` with few
-steps (8 is a good default).
+In the UI, use the **Text -> Image** tab. Krea 2 Turbo runs at `guidance 0` with few
+steps (8 is a good default); `--denoise` is accepted but ignored, there being no refine.
 
-## Civitai / single-file Z-Image model
+## Civitai / single-file Krea 2 model
 
 ```bash
 # Pass a .safetensors directly as the model (treated as the transformer)
@@ -551,21 +536,26 @@ in config) — bf16 and ComfyUI FP8/INT8 "scaled" (ConvRot included) both work;
 
 ### Turbo vs Base (`--guidance`)
 
-Z-Image comes in two flavors that need different inference settings:
+Krea 2 comes in two variants that need opposite inference settings:
 
-| Model | Guidance (CFG) | Steps |
+| Model | Guidance | Steps |
 |---|---|---|
-| **Z-Image Turbo** (distilled) | `--guidance 0` (default) | ~8 |
-| **Z-Image Base** (full) | `--guidance 3.5-5` | ~20-28 |
+| **Krea-2-Turbo** (distilled) | `--guidance 0` (default) | ~8 |
+| **Krea-2-Raw** (undistilled mid-training) | `--guidance 4.5` | ~28 |
+
+Careful with the convention: Krea 2 counts its guidance as `cfg - 1`, so `0` means no
+guidance at all (one forward per step) and `4.5` is a real CFG (two forwards, ~7x the
+cost of the Turbo). A CivitAI recipe that says "cfg 1" therefore becomes `0` here — the
+**Apply CivitAI recommended settings** button does that conversion for you.
 
 ```bash
-# Turbo checkpoint
-python app.py --txt2img --prompt "..." --zimage-model "D:/models/z-image-turbo.safetensors" \
+# Turbo (the default choice)
+python app.py --txt2img --prompt "..." --zimage-model "krea/Krea-2-Turbo" \
     --gen-steps 8 --guidance 0 --save-mode local --output-dir out
 
-# Base checkpoint (needs real CFG + more steps)
-python app.py --txt2img --prompt "..." --zimage-model "D:/models/z-image-base.safetensors" \
-    --gen-steps 24 --guidance 4 --save-mode local --output-dir out
+# Raw (needs a real CFG + more steps; mostly for LoRA training)
+python app.py --txt2img --prompt "..." --zimage-model "krea/Krea-2-Raw" \
+    --gen-steps 28 --guidance 4.5 --save-mode local --output-dir out
 ```
 
 Next to the **CFG guidance** slider there are two dropdowns, ComfyUI-style:
@@ -573,46 +563,48 @@ Next to the **CFG guidance** slider there are two dropdowns, ComfyUI-style:
 - **Sampler**: `euler` (native flow-matching, default), `unipc` (UniPC multistep) or
   `lcm` (LCM flow-matching — few steps, guidance ~0-1: suited to distilled/Turbo models).
   ComfyUI's `dpmpp_sde` is **not** available: it cannot take the custom sigmas the
-  Z-Image pipeline imposes (and needs `torchsde`). ComfyUI's `simple` scheduler is the
+  Krea 2 pipeline imposes (and needs `torchsde`). ComfyUI's `simple` scheduler is the
   same thing as our default `sgm_uniform`.
   Both accept the pipeline's custom sigmas + dynamic shift. The diffusers DPM++ 2M /
-  DPM2a schedulers reject custom sigmas, so they are **not available** for Z-Image
+  DPM2a schedulers reject custom sigmas, so they are **not available** here
   (this is a diffusers limitation, unlike ComfyUI). An incompatible choice falls
   back to Euler.
 - **Schedule** (the sigma schedule, = ComfyUI's "scheduler"): `sgm_uniform` (the
-  native Z-Image linear schedule, default), `beta`, `karras`, `exponential`. These
+  native linear schedule, default), `beta`, `karras`, `exponential`. These
   remap the sigmas on top of the model's dynamic shift. **`simple` is accepted as an
   alias of `sgm_uniform`** wherever a schedule is written (config, `--schedule`, XYZ
   axis) — it is the same curve under ComfyUI's name, so a CivitAI recipe copies over
   without translation. It is normalised back to `sgm_uniform` in metadata and presets.
 
-Both apply to txt2img / img2img / inpaint (not Omni). CLI: `--sampler`, `--schedule`.
-For a **Z-Image Base** checkpoint (e.g. Civitai), the typical recipe is CFG ~4-5,
-~30 steps (Performance "Base CFG"), sampler `euler`, schedule `sgm_uniform` or `beta`.
+Both apply to the txt2img generation — the only diffusion path on Krea 2. CLI:
+`--sampler`, `--schedule`. For a **Raw** checkpoint the typical recipe is guidance 4.5,
+~28 steps (Performance "Raw"), sampler `euler`, schedule `sgm_uniform` or `beta`.
 
 ## Switching models in the UI (Advanced → Models)
 
-The **Z-Image checkpoint** dropdown is the single place to switch model. It merges,
+The **Krea 2 model** dropdown is the single place to switch model. It merges,
 in one list:
 
-- the official base repos **`Tongyi-MAI/Z-Image-Turbo`** and **`Tongyi-MAI/Z-Image`**
-  (pulled from Hugging Face on first use), then
-- every single-file `.safetensors` found in your **Checkpoints folder** **and** the
-  optional **Extra checkpoints folder** (both merged into the same list).
+- the official base repos **`krea/Krea-2-Turbo`** and **`krea/Krea-2-Raw`** (both
+  **gated** on Hugging Face: accept the licence with the account your token belongs to),
+  then
+- every single-file `.safetensors` (and ComfyUI-GGUF `.gguf`) found in your **Checkpoints
+  folder** **and** the optional **Extra checkpoints folder** (both merged into the same
+  list). They go through the conversion described above on their first load.
 
 What each choice does:
 
 | You pick… | Effect | Performance preset (auto) |
 |---|---|---|
-| **Tongyi-MAI/Z-Image-Turbo** | full base repo (distilled) | **Turbo (8 steps)** |
-| **Tongyi-MAI/Z-Image** | full base repo (needs real CFG) | **Base CFG (28 steps)** |
-| a local `.safetensors` | used as the **transformer** (VAE + Qwen3 encoder kept from the current base repo) | from the model profile |
+| **krea/Krea-2-Turbo** | full base repo (distilled) | **Turbo (8 steps, guidance 0)** |
+| **krea/Krea-2-Raw** | full base repo (needs a real CFG) | **Raw (28 steps, guidance 4.5)** |
+| a local `.safetensors` / `.gguf` | converted once, then used as the **transformer** (VAE + text encoder kept from the current base repo) | from the model profile |
 
 Switching the dropdown automatically syncs **steps, guidance and the Performance
 radio**. The change is applied on the next **Generate**.
 
 **Switching between two `.safetensors` (or clearing an override) reloads only the
-transformer** — the VAE, the Qwen3-4B text encoder and the tokenizer stay in VRAM, so it
+transformer** — the VAE, the Qwen3-VL text encoder and the tokenizer stay in VRAM, so it
 takes seconds instead of a full reload. Only picking a **different base repo** reloads
 everything (its VAE/encoder genuinely differ). Same for LoRAs: they are hot-swapped, and
 changing just a weight is instant.
@@ -621,25 +613,29 @@ Steps:
 
 1. **Models → Checkpoints folder** (and, if you keep models elsewhere, **Extra
    checkpoints folder**) → **Refresh**. Both folders feed the single dropdown.
-2. Pick an entry in **Z-Image checkpoint** — a base repo or a local file.
+2. Pick an entry in **Krea 2 model** — a base repo or a local file.
 3. **Generate** → it loads with your selection.
 
-### Community full-repo models (e.g. Juggernaut-Z-Image)
+### Community full-repo models
 
 Some community models ship as a **full diffusers repo** but with an **incomplete
 tokenizer** (only `tokenizer.json`), so loading them as the **base** fails. Load
 just their **transformer** instead and keep the base components from Turbo:
 
-1. **Models → "Transformer override (HF repo / diffusers folder)"** = e.g.
-   `RunDiffusion/Juggernaut-Z-Image` → **Apply**.
-2. Keep the **Z-Image checkpoint** dropdown on `Tongyi-MAI/Z-Image-Turbo` (provides
-   VAE + Qwen3 encoder + tokenizer).
-3. **Generate** (downloads the transformer once, ~12 GB).
+1. **Models → "Transformer override (HF repo / diffusers folder)"** = the repo →
+   **Apply**. Diffusers folders only here (a `model_index.json`); a single file goes
+   in the **Krea 2 model** dropdown instead, which converts it.
+2. Keep the **Krea 2 model** dropdown on `krea/Krea-2-Turbo` (it provides the
+   VAE + the Qwen3-VL encoder + the tokenizer).
+3. **Generate** (downloads the transformer once).
 
-CLI equivalent: `--zimage-transformer RunDiffusion/Juggernaut-Z-Image`.
+CLI equivalent: `--zimage-transformer <repo_or_folder>` (the flag keeps its inherited
+name, see the mapping table).
 
-Juggernaut-Z is a **Z-Image Base** fine-tune → set **Performance = "Base CFG"**
-(guidance ~6, 25-45 steps). Tested working.
+If the fine-tune is built on **Raw** rather than Turbo, set **Performance = "Raw"**
+(guidance 4.5, ~28 steps), otherwise the result comes out flat. The Z-Image fine-tunes
+documented in crispz-studio (Juggernaut-Z and the like) do **not** load here: another
+architecture.
 
 **Gotchas**
 
@@ -653,15 +649,15 @@ Juggernaut-Z is a **Z-Image Base** fine-tune → set **Performance = "Base CFG"*
   is selected, instant loads after. `.gguf` (arch 'krea2') converts too — dequantized to bf16, it only
   saves download size. SVDQuant files stay refused. The official base model
   must have been loaded once (its config seeds conversion).
-- If the checkpoint is a **Z-Image Base** model (not Turbo), set **Performance →
-  "Base CFG (28 steps)"** (guidance ~4, more steps), otherwise the result is flat.
+- If the checkpoint is built on **Raw** (not Turbo), set **Performance → "Raw"**
+  (guidance 4.5, ~28 steps), otherwise the result is flat.
 - Verify what loaded with `run.bat --debug`:
-  `[crispz] loading Z-Image transformer (single-file): …`.
+  `[crispz] loading Krea 2 transformer (…): …`.
 
 **Persist the folders** (so you don't re-type them) in `config.txt`:
 
 ```json
-"checkpoints_dir": "C:\\path\\to\\models\\Stable-diffusion\\Z-Image",
+"checkpoints_dir": "C:\\path\\to\\models\\Stable-diffusion\\Krea2",
 "checkpoints_extra_dir": "",
 "loras_dir": "C:\\path\\to\\models\\Lora"
 ```
@@ -722,30 +718,25 @@ The queue keeps each job's encoder, and *Default* survives a restart. Config:
 its own **weight** (range **`-2..2`**, configurable via `lora_weight_min` /
 `lora_weight_max`). A **negative weight inverts the LoRA's effect** — a "skinny slider"
 LoRA at `-1` pushes the other way; `0` disables it. They are combined (`set_adapters`) on
-the transformer (shared
-by txt2img/img2img) and applied on the next run **without reloading the model** —
+the transformer and applied on the next run **without reloading the model** —
 changing a weight is instant, swapping LoRA files takes ~1 s. Selecting LoRAs auto-fills their
 merged **keywords / trigger words** (read from the file metadata); **Add to prompt**
 appends them.
 
-## Disabling the upscale (pure txt2img / pure img2img)
+## Disabling the upscale (pure txt2img)
 
 - **txt2img only** (no upscale): the default. Don't pass `--upscale` (CLI), or leave
   the "Upscale after generation" checkbox off (UI).
-- **img2img only** (refine without ESRGAN enlargement): `--no-esrgan` (CLI), or
-  uncheck **"ESRGAN upscale"** in the Image -> Upscale tab. The Z-Image refine runs
-  on the input at its native size.
-- **ESRGAN only** (fast upscale, skip the slow refine): `--no-refine` (CLI, shortcut
-  for `--denoise 0`), or uncheck **"Refine (img2img)"** in the Image -> Upscale tab.
-  The two stages are independent toggles: the diffusion refine runs at the *upscaled*
-  resolution, so it is the slow part — turn it off when you just want a clean enlarge.
+- **ESRGAN only**: that is what the Upscale tab does on Krea 2, whatever the refine
+  controls say. There being no `Krea2Img2ImgPipeline`, the denoise is forced to 0 and the
+  refine box is hidden; `--no-refine` and `--denoise 0` are already the behaviour.
+- **img2img only** (a refine with no ESRGAN enlargement) is **not available here**:
+  without the enlargement there is nothing left to do. Use crispz-studio, crispz-krea or
+  crispz-qwen-edit for that.
 
 ```bash
-# img2img only: Z-Image refine on the input, no enlargement
-python app.py --cli -i in.png --no-esrgan --denoise 0.30 --save-mode local --output-dir out
-
-# ESRGAN only: fast upscale, no diffusion refine
-python app.py --cli -i in.png -m 4x-ClearRealityV1_Soft.safetensors --no-refine \
+# ESRGAN upscale, the only mode on Krea 2
+python app.py --cli -i in.png -m 4x-ClearRealityV1_Soft.safetensors \
     --factor 2 --save-mode local --output-dir out
 ```
 
@@ -785,7 +776,7 @@ The install scripts:
 - automatically uninstall a broken `xformers` (built for the wrong torch
   version -> DLL load error when diffusers loads),
 - install the other deps from `requirements.txt`,
-- verify that `ZImageImg2ImgPipeline` loads,
+- verify that `Krea2Pipeline` loads,
 - create the `upscale_models/` folder.
 
 `run.sh` / `cli.sh` (and the `.bat`) automatically use `.venv` if it exists.
@@ -820,10 +811,9 @@ pip install -r requirements.txt
   for a different torch (e.g. `xformers` for torch 2.9 while you have torch 2.8),
   diffusers crashes with `DLL load failed while importing _C` when loading the
   VAE. Fix: `pip uninstall xformers`. The native SDPA in torch 2.7+ is enough.
-- **`transformers` too old.** `ZImageImg2ImgPipeline` loads an encoder that
-  imports `Dinov2WithRegistersConfig`, available since transformers >= 4.49.
-  The requirements pin this lower bound.
-- **diffusers from git.** Z-Image is only in diffusers from source (not in the
+- **`transformers` too old.** The Krea 2 pipeline loads a Qwen3-VL encoder that needs a
+  recent transformers; the requirements pin that lower bound.
+- **diffusers from git.** Krea 2 is only in diffusers from source (not in the
   releases at the time of writing), hence the `git+...` in requirements.
 - **Gradio pinned `<6`.** Gradio 6's Brotli middleware has an h11 bug that spams
   `Too little data for declared Content-Length` in the console when a response is
@@ -831,28 +821,28 @@ pip install -r requirements.txt
 
 ---
 
-## Configurable paths (ESRGAN_DIR + Z-Image)
+## Configurable paths (ESRGAN_DIR + the Krea 2 model)
 
 Two paths are configurable, persisted in `preferences.json`. Resolution order on
 each launch:
 
 1. Environment variable (`ESRGAN_DIR`, `ZIMAGE_MODEL`)
 2. `preferences.json` at the project root
-3. Default: `./upscale_models` for ESRGAN, `Tongyi-MAI/Z-Image-Turbo` for Z-Image
+3. Default: `./upscale_models` for ESRGAN, `krea/Krea-2-Turbo` for the model
 
 Three ways to change them:
 
-- **Gradio UI**: **Advanced → Models** tab. Pick the model in the **Z-Image
-  checkpoint** dropdown (it reloads on next Generate), set the **Checkpoints /
+- **Gradio UI**: **Advanced → Models** tab. Pick the model in the **Krea 2 model**
+  dropdown (it reloads on next Generate), set the **Checkpoints /
   Extra checkpoints / ESRGAN** folders, then **Refresh ESRGAN** or **Save paths**
   (writes `preferences.json`).
 - **CLI**: `--esrgan-dir <path>`, `--zimage-model <repo_or_path>`, `--save-paths`
   to persist (with or without `-i`).
 - **Interactive CLI** (`cli.sh` / `cli.bat`): first prompt = ESRGAN folder +
-  Z-Image model. Saved to `preferences.json` if you choose to keep them.
+  the model. Saved to `preferences.json` if you choose to keep them.
 
-`zimage_model` accepts either an HF repo (e.g. `Tongyi-MAI/Z-Image-Turbo`) or a
-local path to an already-downloaded `diffusers` folder.
+`zimage_model` (the key keeps its inherited name) accepts either an HF repo (e.g.
+`krea/Krea-2-Turbo`) or a local path to an already-downloaded `diffusers` folder.
 
 ## ESRGAN models
 
@@ -869,15 +859,16 @@ A few useful picks:
 
 ---
 
-## Z-Image (first run)
+## Krea 2 (first run)
 
-No file to provide: on first launch, `diffusers` fetches the Z-Image transformer,
-the VAE and the Qwen3-4B text encoder from Hugging Face, then everything is cached
-locally. Subsequent runs are offline.
+No file to provide, but the repo is **gated**: accept the licence on Hugging Face with
+the account your token belongs to (see "gated access" below), then on first launch
+`diffusers` fetches the Krea 2 transformer, the VAE and the Qwen3-VL text encoder, and
+everything is cached locally. Subsequent runs are offline.
 
 **Loading progress** — because the first load downloads several GB and then reads them
 into VRAM, it can take minutes. The terminal shows a live one-line status
-(`[crispz][load] Z-Image base... 45s | 3.2 GB in VRAM`, or `... (downloading / reading,
+(`[crispz][load] Krea 2 base... 45s | 3.2 GB in VRAM`, or `... (downloading / reading,
 first run only)` before allocation starts) and the UI progress bar advances with it.
 Turn it off or tune it in `config.txt`:
 `"load_progress": {"enabled": true, "target_vram_gb": 14.0, "heartbeat_s": 2.0}`
@@ -996,8 +987,8 @@ UI at http://127.0.0.1:7860. It includes:
 - **Before/after slider** (`gradio_imageslider`) that overlays source and result
   with a mouse cursor. Falls back to two side-by-side images if the component is
   not installed.
-- **Timing report** under the image: ESRGAN, Z-Image refine, total, source path,
-  save path.
+- **Timing report** under the image: ESRGAN, refine (always 0s on Krea 2), total,
+  source path, save path.
 - **"Save" section** with the same modes as the CLI.
 - **Batch mode**: if you fill in "OR source folder", the uploaded image is ignored
   and the app processes the whole folder.
@@ -1061,7 +1052,7 @@ Every UI setting has a CLI flag and a prefs key:
 | UI / interactive CLI | CLI flag | preferences.json | Default |
 |---|---|---|---|
 | ESRGAN_DIR | `--esrgan-dir` | `esrgan_dir` | `./upscale_models` |
-| Z-Image model | `--zimage-model` | `zimage_model` | `Tongyi-MAI/Z-Image-Turbo` |
+| Krea 2 model | `--zimage-model` | `zimage_model` | `krea/Krea-2-Turbo` |
 | Source image | `-i` (file or glob) | - | - |
 | Batch source folder | `-i` (folder) or `--input-folder` | - | - |
 | ESRGAN model | `-m` / `--model` | `model` | `4x-ClearRealityV1_Soft.safetensors` |
@@ -1107,7 +1098,7 @@ Full `preferences.json` example:
 ```json
 {
   "esrgan_dir": "C:/path/to/models/ESRGAN",
-  "zimage_model": "Tongyi-MAI/Z-Image-Turbo",
+  "zimage_model": "krea/Krea-2-Turbo",
   "model": "4x-ClearRealityV1_Soft.safetensors",
   "factor": 2.0,
   "denoise": 0.30,
@@ -1128,11 +1119,12 @@ Full `preferences.json` example:
 `run()` returns (and prints / logs) the time of each stage:
 
 - `esrgan` : stage 1 (Real-ESRGAN + Lanczos resize)
-- `refine` : stage 2 (Z-Image img2img). 0s if `denoise <= 0`.
+- `refine` : stage 2 (img2img). **Always 0s on Krea 2**: the pipeline does not exist,
+  so the denoise is forced to 0.
 - `total`  : sum
 
 crispz also prints `[crispz] ...` stage logs to **stderr** (loading ESRGAN, loading
-or reusing the Z-Image pipeline, stage timings, per-tile progress). This fills the
+or reusing the Krea 2 pipeline, stage timings, per-tile progress). This fills the
 otherwise-silent model-load gaps and tells you whether a run reloaded the pipeline or
 reused the cached one. Silenced with `--quiet`; on stderr, so it never pollutes
 `--print-output`.
@@ -1179,8 +1171,8 @@ that reinstalls the dependencies.
 
 ## VRAM offload (`--cpu-offload`)
 
-The Z-Image refinement pass is the heavy VRAM consumer. By default it runs fully
-on the GPU. To shrink the peak (so crispz can coexist with another GPU app, e.g. a
+The diffusion pass is the heavy VRAM consumer — on Krea 2 that means the txt2img
+generation, the refine having no pipeline. By default it runs fully on the GPU. To shrink the peak (so crispz can coexist with another GPU app, e.g. a
 loaded Fooocus), `--cpu-offload` streams the diffusion weights between RAM and GPU.
 This is NOT quantization: weights stay BF16, they just move RAM <-> GPU. Requires
 `accelerate` (already in `requirements.txt`). Available in the UI too (Tiling/VRAM
@@ -1255,7 +1247,7 @@ python app.py --cli -i in.png -m 4x-ClearRealityV1_Soft.safetensors --refine-fir
 
 ## Server mode (`--serve`)
 
-For repeated upscales, the per-call model load (Z-Image + Qwen3-4B encoder) dominates
+For repeated upscales, the per-call model load (Krea 2 + Qwen3-VL encoder) dominates
 and makes timings very uneven. `--serve` runs a small HTTP server that loads the model
 **lazily on the first request** and keeps it **warm**, then **frees the VRAM after
 `--idle-timeout` seconds** of inactivity (so it can coexist with another GPU app).
@@ -1288,13 +1280,19 @@ Measured benefit (RTX 5090, 2K): first call ~66s (cold, model load), next call ~
 
 ## Useful settings
 
+> On Krea 2 the rows about **denoise** and the **diffusion refine** describe a pass this
+> fork does not have (no `Krea2Img2ImgPipeline`): the flags are accepted and ignored, the
+> denoise is forced to 0. They are kept here because the five apps share this
+> documentation, and they apply as written in the other forks. Everything about ESRGAN,
+> the factor and the tiling applies here.
+
 | Setting | Advice |
 |---|---|
-| **Denoise (strength)** | 0.05-0.25 = subtle, stays very close to the input. 0.25-0.40 = creative, more detail injected. Beyond ~0.40, Z-Image starts to reinvent. At high denoise, a **detailed caption prompt** greatly improves coherence. |
+| **Denoise (strength)** | *No effect on Krea 2 (no img2img pipeline).* In the other forks: 0.05-0.25 = subtle, stays very close to the input. 0.25-0.40 = creative, more detail injected. Beyond ~0.40 the model starts to reinvent. At high denoise, a **detailed caption prompt** greatly improves coherence. |
 | **Denoise + tiled refine (4K+)** | When the refine is **tiled** (4K, or auto-tiled above `auto_refine_tile_above`), each tile is re-diffused independently. The **global prompt describes the whole scene, not the tile** -> passing it to every tile makes the model redraw the subject (you get the teacup / butterfly repeated in several tiles). Two guards: (1) `refine_tile_prompt` -> per-tile prompt, **empty by default** so each tile only refines local detail (set to `"global"` for the old behavior, or a generic string like `"high detail, sharp focus"`); (2) `refine_tile_denoise_cap` (default **0.40**) caps the per-tile denoise as a safety net. Whole-image refine keeps your prompt and denoise (no duplication possible). |
 | **Diffusion tile size (4K+)** | The dropdown defaults to **Auto**: below `auto_refine_tile_above` the refine runs on the whole image, and above it the tile size is **computed from the output size** to minimise the *tiled surface* (`tiles x tile^2`) - which is what the pass actually costs. Measured on an RTX 5090 at 4096x4096: the cost per pixel is flat from 768 to 1024 (1.78 / 1.83 / 1.79 us/px) and only climbs beyond (2.41 at 1536, 3.00 at 2048), so time follows the covered surface, not the tile size. The old fixed 1024 overflowed the grid (step 960 on 4096 -> the last tile is clamped and re-covers 832px instead of 64 = **1.56x** the image area); Auto picks 896 there (1.20x) -> **36.7s instead of 46.9s**, same 25 tiles and same 8 seams. Search is bounded to `[768, 1024]` (`auto_refine_tile_min` / `auto_refine_tile_max`): smaller tiles multiply seams and give the model less context, which visibly changes the render. Pick a fixed size in the dropdown, or set `auto_refine_tile` to an integer, to force it. |
 | **Steps** | Effective steps ~= `steps * strength`. At strength 0.30, 12-16 steps give enough denoising steps. |
-| **Guidance** | Fixed at 0.0 (Z-Image Turbo). |
+| **Guidance** | 0.0 on a Turbo (distilled), 4.5 on a Raw. Krea 2 counts `cfg - 1`, so 0 = no guidance. |
 | **Prompt** | Optional. Empty works very well if denoise <= 0.30. |
 | **Factor** | ESRGAN runs at native x4, then Lanczos resizes to the requested factor. For a clean x2, the image goes through a raw x4. |
 | **ESRGAN tiling** | 0 (whole image) on 24+ GB VRAM. 512-768 otherwise. Overlap 32 by default, increase if you see seams. |
@@ -1321,7 +1319,9 @@ python app.py --cli -i my_image.jpg -o out/my_image_upscaled.png \
 
 ## High resolution (4K+): diffusion tiling
 
-By default the Z-Image pass runs on the whole image. That is ideal up to ~2048px on
+*Krea 2 has no diffusion refine, so this section describes the other forks; the tiling
+options are accepted here and do nothing.* By default the diffusion pass runs on the whole
+image. That is ideal up to ~2048px on
 the long side; beyond that you exceed the training resolution (artifacts) and the
 VRAM peak explodes.
 
