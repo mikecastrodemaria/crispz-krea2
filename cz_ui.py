@@ -326,7 +326,6 @@ _CAP = getattr(cz_pipeline, "CAPABILITIES", {})
 HAS_IMG2IMG = bool(_CAP.get("img2img", True))
 HAS_INPAINT = bool(_CAP.get("inpaint", True))
 HAS_OMNI = bool(_CAP.get("omni", True))
-HAS_SINGLE_FILE = bool(_CAP.get("single_file", True))
 
 # Mutable state read live from cz_pipeline.* / cz_face.* (LORAS, FACESWAP_RESTORE,
 # CHECKPOINTS_DIR, GUIDANCE, _PROGRESS, _STOP, ...). app.py exposes these names as proxies
@@ -599,7 +598,9 @@ def _refresh_models(new_dir):
 #   Turbo = distilled -> 8 steps, guidance 0. The default choice.
 #   Raw   = undistilled mid-training -> 28 steps + CFG (~7x slower). Mostly useful
 #           for training LoRAs, not for generating day to day.
-# No single-file here: Krea 2 has no from_single_file (see CAPABILITIES).
+# No single file in THIS list: these are the official repos. The local single files
+# (.safetensors, .gguf) are added by list_checkpoints() and go through our own conversion --
+# diffusers has no from_single_file for this architecture, we do not need it.
 ZIMAGE_BASE_REPOS = ["krea/Krea-2-Turbo", "krea/Krea-2-Raw"]
 # No Performance preset is forced: profile_for_model() reads cz_core's profiles
 # ("turbo" -> 8/0.0, "raw" -> 28/4.5), which already covers both variants. NB: do NOT

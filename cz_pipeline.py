@@ -73,7 +73,11 @@ CAPABILITIES = {
     "inpaint": False,   # no Krea2InpaintPipeline  -> inpaint, outpaint, reframe(contain)
     "omni": False,      # no instruction-based editing
     "lora": True,       # Krea2Transformer2DModel herite de PeftAdapterMixin
-    "single_file": False,   # no FromOriginalModelMixin -> neither a Civitai .safetensors nor a GGUF
+    "single_file": True,    # not through diffusers (no FromOriginalModelMixin) but through OUR
+                            # conversion: a Civitai .safetensors (bf16 / FP8 / INT8 'scaled')
+                            # and a ComfyUI-GGUF .gguf are listed and loaded, converted once
+                            # to a diffusers folder (_converted_folder). SVDQuant/NVFP4 stay
+                            # refused, with the reason.
     "esrgan": True,     # a pure ESRGAN upscale: independent of the diffusion model
 }
 
@@ -1139,10 +1143,11 @@ def _safetensors_is_fp8(path):
     return _safetensors_unsupported(path) == "FP8"
 
 
-# Architecture expected in .gguf files. A diffusion GGUF declares its architecture in
-# 'general.architecture': 'flux' (city96 FLUX.1 dev/schnell/krea), 'qwen_image',
-# 'krea2' (Krea 2 = its OWN architecture, which requires ComfyUI + its own encoder/VAE),
-# 'llama'/'gemma3'... for LLMs. Only 'qwen_image' is loaded here.
+# Inherited from crispz-qwen-edit and UNUSED here (as is the 'gguf_arch' config key it
+# reads): list_checkpoints() filters no .gguf on its architecture, and _read_gguf_state_dict
+# dequantizes whatever Krea 2 export it is given. A diffusion GGUF declares its architecture
+# in 'general.architecture' ('flux', 'qwen_image', 'krea2'...), which _gguf_arch() can still
+# read from a header when a filter is wanted one day.
 GGUF_ARCH = str(CONFIG.get("gguf_arch") or "qwen_image").strip().lower()
 
 _GGUF_FIXED = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i",

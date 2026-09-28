@@ -33,13 +33,19 @@ forcées à un no-op (refine décoché, denoise 0).
 
 ## Ce qui diverge de l'amont — à ne PAS écraser lors d'un merge
 
-**1. Pas de single-file, du tout.** `Krea2Transformer2DModel` n'hérite pas de
-`FromOriginalModelMixin` → `from_single_file` n'existe pas. Conséquences :
-- les `.safetensors` Civitai (Krea 2 Turbo fp8, Raw fp8 **et** bf16) sont inchargeables ;
-- les GGUF communautaires aussi (le chemin GGUF passe par `from_single_file`) ;
-- `list_checkpoints()` ne liste que des **dossiers diffusers** (`model_index.json`) ;
-- tout le bloc GGUF hérité de qwen-edit (`GGUF_ARCH`, `_gguf_arch`, `GGUFQuantizationConfig`)
-  est mort. Ne pas le réactiver depuis l'amont.
+**1. Le single-file passe par NOTRE conversion, pas par diffusers.**
+`Krea2Transformer2DModel` n'hérite pas de `FromOriginalModelMixin` → `from_single_file`
+n'existe pas. La table de renommage est donc la nôtre (`_krea2_rename`) :
+- les `.safetensors` Civitai (bf16 **et** FP8/INT8 « scaled », ConvRot compris) et les
+  `.gguf` ComfyUI-GGUF sont **proposés et chargeables** : convertis UNE fois en dossier
+  diffusers dans `cache/krea2_convert/` (`_converted_folder`, config `convert_cache*`),
+  puis chargés par le chemin quantifié normal ;
+- `list_checkpoints()` liste donc les dossiers diffusers **et** ces fichiers ;
+  `tools/rebuild_convert_cache.py` pré-remplit le cache ;
+- SVDQuant / NVFP4 restent refusés, avec la raison ;
+- `CAPABILITIES["single_file"]` vaut **True** pour cette raison. Ce qui est mort, c'est
+  `GGUFQuantizationConfig` (le chemin GGUF de l'amont, qui passe par `from_single_file`) et
+  `GGUF_ARCH` : ne pas les réactiver depuis l'amont.
 
 **2. La quantification torchao n'est pas optionnelle.** Mesures RTX 5090, 1024×1024, 8 steps :
 
