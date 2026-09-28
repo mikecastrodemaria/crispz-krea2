@@ -24,7 +24,7 @@ def test_mode_setter_normalises():
     try:
         czp.set_force_ratio_mode("EXTEND")
         assert czp.FORCE_RATIO_MODE == "extend"
-        czp.set_force_ratio_mode("nimporte quoi")
+        czp.set_force_ratio_mode("anything at all")
         assert czp.FORCE_RATIO_MODE == "crop"
     finally:
         czp.FORCE_RATIO_MODE = old
@@ -38,7 +38,7 @@ def test_extend_raises_unsupported():
         czp._extend_to_ratio(Image.new("RGB", (512, 768)), 16, 9, "", 6, 1)
     except Exception as e:
         raised = "Krea 2" in str(e) or "inpaint" in str(e).lower()
-    assert raised, "extend sans pipeline inpaint doit lever le message clair"
+    assert raised, "extend with no inpaint pipeline must raise the clear message"
 
 
 def test_ui_radio_mapping():

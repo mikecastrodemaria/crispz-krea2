@@ -176,7 +176,7 @@ def test_the_class_comes_from_the_base_repo_model_index():
         except RuntimeError as e:
             assert "text encoder" in str(e), e
         else:
-            raise AssertionError("un model_index sans text_encoder doit lever")
+            raise AssertionError("a model_index with no text_encoder must raise")
     finally:
         sys.modules.pop("_fake_te_lib", None)
     print("OK test_the_class_comes_from_the_base_repo_model_index")
@@ -207,9 +207,9 @@ def test_changing_the_encoder_frees_the_pipe_and_the_cache():
         P._EMBED_CACHE[("k",)] = ("v",)
         P.set_text_encoder(r"D:\enc\qwen3-vl-abl")
         assert P.TEXT_ENCODER == r"D:\enc\qwen3-vl-abl"
-        assert P._BASE_PIPE is None, "le pipeline doit etre libere"
-        assert not P._EMBED_CACHE, "les anciens encodages resteraient servis"
-        assert P._TEXT_ENCODER_ACTIVE == "", "plus de pipe -> plus d'encodeur charge"
+        assert P._BASE_PIPE is None, "the pipeline must be released"
+        assert not P._EMBED_CACHE, "the old encodings would still be served"
+        assert P._TEXT_ENCODER_ACTIVE == "", "no pipe any more -> no loaded encoder either"
         # the same value: nothing moves, no pointless reload
         sentinel = P._BASE_PIPE = object()
         P.set_text_encoder(r"D:\enc\qwen3-vl-abl")
@@ -244,7 +244,7 @@ def test_the_embed_key_carries_the_encoder():
         assert pipe.n == 1, pipe.n
         P._TEXT_ENCODER_ACTIVE = r"D:\enc\qwen3-vl-abl"
         P._cached_prompt_embeds(pipe, "p", {})
-        assert pipe.n == 2, "un encodage de l'autre encodeur a ete resservi"
+        assert pipe.n == 2, "an encoding from the other encoder was served again"
     finally:
         P._TEXT_ENCODER_ACTIVE, P._EMBED_CACHE_MAX = old
         P._embed_cache_clear()
@@ -259,7 +259,7 @@ def test_metadata_names_the_encoder_that_ran_and_never_its_path():
         P.TEXT_ENCODER = P._TEXT_ENCODER_ACTIVE = path
         m = P._gen_meta("txt2img", "p")
         assert m["text_encoder"] == "qwen3-vl-4b-abliterated", m
-        assert "someone" not in json.dumps(m), "chemin local dans les metadonnees"
+        assert "someone" not in json.dumps(m), "a local path in the metadata"
         # independent of the transformer override (which alone makes base_repo written)
         assert "base_repo" not in m, m
         P.ZIMAGE_TRANSFORMER = r"F:\models\un_checkpoint.safetensors"
@@ -408,7 +408,7 @@ def test_ensure_base_hands_the_encoder_to_from_pretrained():
     assert repo == P.BASE_REPO, repo
     assert isinstance(kw.get("text_encoder"), _FakeEncoderClass), kw
     assert pipe.text_encoder is kw["text_encoder"]
-    assert kw["transformer"] == "TRANSFORMER", "le transformer (quantifie) reste charge a part"
+    assert kw["transformer"] == "TRANSFORMER", "the (quantised) transformer stays loaded separately"
     assert active == d, active
     assert meta["text_encoder"] == "qwen3-vl-4b-abliterated", meta
     print("OK test_ensure_base_hands_the_encoder_to_from_pretrained")
@@ -426,7 +426,7 @@ def test_a_misfit_or_failing_encoder_falls_back_to_the_base_one():
         assert "text_encoder" not in meta, meta
         assert meta["text_encoder_not_applied"] == os.path.basename(src), meta
         if boom is None:
-            assert not _FakeEncoderClass.calls, "refuse a la config: aucun poids lu"
+            assert not _FakeEncoderClass.calls, "refused at config time: no weights read"
     # with no replacement encoder, nothing changes
     pipe, (repo, kw), active, meta = _run_ensure_base("", QWEN3VL_4B)
     assert "text_encoder" not in kw and active == "", kw

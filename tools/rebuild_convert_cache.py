@@ -49,18 +49,18 @@ for d in czp._checkpoint_dirs():
             files.append(p)
 
 if not files:
-    print("Aucun checkpoint single-file trouve dans:", czp._checkpoint_dirs())
+    print("No single-file checkpoint found in:", czp._checkpoint_dirs())
     sys.exit(0)
 
 cap = float(czp.CONFIG.get("convert_cache_max_gb", 80) or 0)
 need = len(files) * 26
-print(f"{len(files)} checkpoint(s) a couvrir (~{need} Go de cache; "
-      f"plafond convert_cache_max_gb = {cap:.0f} Go"
-      + (", 0 = illimite)" if cap == 0 else ")"))
+print(f"{len(files)} checkpoint(s) to cover (~{need} GB of cache; "
+      f"convert_cache_max_gb ceiling = {cap:.0f} GB"
+      + (", 0 = unlimited)" if cap == 0 else ")"))
 if 0 < cap < need:
-    print(f"ATTENTION: plafond {cap:.0f} Go < ~{need} Go necessaires -> les "
-          f"conversions les plus anciennes seraient evincees par les dernieres."
-          f" Monte convert_cache_max_gb dans config.txt avant de continuer.")
+    print(f"WARNING: a {cap:.0f} GB ceiling < the ~{need} GB needed -> the oldest "
+          f"conversions would be evicted by the last ones."
+          f" Raise convert_cache_max_gb in config.txt before going on.")
     if "--list" not in sys.argv:
         sys.exit(1)
 
@@ -80,8 +80,8 @@ if "--list" in sys.argv:
                 stem = re.sub(r"[^A-Za-z0-9_-]+", "_",
                               os.path.splitext(os.path.basename(p))[0])[:40]
                 dst = os.path.join(root, f"{stem}_{key}")
-                done = "DEJA CONVERTI" if os.path.isfile(
-                    os.path.join(dst, "source.json")) else "a convertir"
+                done = "ALREADY CONVERTED" if os.path.isfile(
+                    os.path.join(dst, "source.json")) else "to convert"
         except Exception as e:
             done = f"? ({e})"
         print(f"  {os.path.basename(p)}: {done}")
@@ -97,14 +97,14 @@ for i, p in enumerate(files, 1):
         dt = time.time() - t0
         if dt < 5:
             skipped += 1
-            print(f"[{i}/{len(files)}] SKIP {name} (deja en cache)")
+            print(f"[{i}/{len(files)}] SKIP {name} (already cached)")
         else:
             ok += 1
-            print(f"[{i}/{len(files)}] OK {name} en {dt / 60:.1f} min")
+            print(f"[{i}/{len(files)}] OK {name} in {dt / 60:.1f} min")
     except Exception as e:
         fail += 1
         print(f"[{i}/{len(files)}] FAIL {name}: {type(e).__name__}: {e}")
 
-print(f"\nTermine en {(time.time() - t_all) / 60:.0f} min: "
-      f"{ok} converti(s), {skipped} deja en cache, {fail} echec(s).")
-print("Relancable a volonte: tout ce qui est fait est saute.")
+print(f"\nDone in {(time.time() - t_all) / 60:.0f} min: "
+      f"{ok} converted, {skipped} already cached, {fail} failure(s).")
+print("Re-runnable at will: everything already done is skipped.")
