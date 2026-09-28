@@ -338,7 +338,7 @@ HAS_OMNI = bool(_CAP.get("omni", True))
 
 # Progress/stop, setters (model/transformer/checkpoints/loras/omni/offload/guidance),
 # list_checkpoints/list_loras, lora_keywords, check_omni_available, free_vram +
-# generation/orchestration -> cz_pipeline.py (importes en tete). L'UI pose
+# generation/orchestration -> cz_pipeline.py (imported at the top). The UI sets
 # cz_pipeline._PROGRESS / cz_pipeline._STOP and reads cz_pipeline.NAME for the state.
 
 
@@ -368,8 +368,8 @@ def apply_preset_to_args(args, raw_argv):
 # (gr.ImageEditor helpers, no pipeline state).
 # ----------------------------------------------------------------------------
 def _editor_to_image_mask(editor_value):
-    """Extrait (image, masque) d'un gr.ImageEditor. Masque = zone peinte (diff
-    composite/background), blanc = a regenerer."""
+    """Extracts (image, mask) from a gr.ImageEditor. Mask = the painted area (the
+    composite/background diff), white = to be regenerated."""
     if not editor_value:
         return None, None
     bg = editor_value.get("background")
@@ -1431,7 +1431,7 @@ from cz_assetbrowser import (_ab_get, _ab_resolve_dir, ab_reindex, ab_open_fast,
                              ab_build_catalog, delete_asset, rebuild_thumbs)
 
 
-# Assets statiques (SPA Asset Browser, JS d'interface, CSS) -> cz_assets.py
+# Static assets (the Asset Browser SPA, the interface JS, the CSS) -> cz_assets.py
 from cz_assets import ASSET_BROWSER_HTML, CZ_JS, FOOOCUS_CSS  # noqa: E402
 
 
@@ -1481,7 +1481,7 @@ def _ui_gallery_open(output_dir):
                            bool(_ab_get("blur_thumbnails")), bool(_ab_get("generate_thumbnails")))
     except Exception as e:
         return f"Gallery open failed: {e}", ""
-    # Catalogue LoRAs / Models (onglets de l'Asset Browser) construit en tache de fond.
+    # The LoRAs / Models catalogue (Asset Browser tabs), built in the background.
     try:
         threading.Thread(target=ab_build_catalog,
                          args=(output_dir, cz_pipeline.LORAS_DIR, cz_pipeline._checkpoint_dirs()),
@@ -2166,8 +2166,8 @@ def _q_label(vals, ms):
 
 
 def _q_move(items, sel, delta):
-    """Deplace l'element sel de delta. Mutation IN-PLACE de l'objet d'etat partage
-    (cf. _ui_queue_run). Renvoie (items, nouvelle selection)."""
+    """Moves item `sel` by `delta`. Mutates the shared state object IN PLACE (see
+    _ui_queue_run). Returns (items, the new selection)."""
     if not isinstance(items, list):
         items = []
     if sel is None or not (0 <= int(sel) < len(items)):
@@ -2180,8 +2180,8 @@ def _q_move(items, sel, delta):
 
 
 def _q_remove(items, sel):
-    """Supprime l'element sel. Mutation IN-PLACE de l'objet d'etat partage.
-    Renvoie (items, selection ajustee)."""
+    """Removes item `sel`. Mutates the shared state object IN PLACE.
+    Returns (items, the adjusted selection)."""
     if not isinstance(items, list):
         items = []
     if sel is None or not (0 <= int(sel) < len(items)):
@@ -2191,7 +2191,7 @@ def _q_remove(items, sel):
 
 
 def _q_render(items, sel=None):
-    """Updates UI d'apres la file: (dropdown selection, markdown liste, label bouton)."""
+    """UI updates from the queue: (dropdown selection, markdown list, button label)."""
     choices = [(f"#{i + 1} {it['label']}", i) for i, it in enumerate(items)]
     val = int(sel) if (sel is not None and 0 <= int(sel) < len(items)) else None
     md = "\n".join(f"{i + 1}. {it['label']}" for i, it in enumerate(items)) or "*Queue empty.*"
@@ -3324,12 +3324,12 @@ def build_ui():
         cf_out = gr.Textbox(visible=False)
         cf_btn = gr.Button(visible=False)
         cf_btn.click(_api_civitai_fetch, [cf_rel, cf_kind], cf_out, api_name="civitai_fetch")
-        # Endpoint de progression (polling par l'Asset Browser pendant le fetch CivitAI)
+        # Progress endpoint (polled by the Asset Browser during the CivitAI fetch)
         cp_in = gr.Textbox(visible=False)
         cp_out = gr.Textbox(visible=False)
         cp_btn = gr.Button(visible=False)
         cp_btn.click(_api_job_progress, cp_in, cp_out, api_name="job_progress")
-        # Endpoint batch (bouton 'Fetch all missing' de l'Asset Browser)
+        # Batch endpoint (the Asset Browser's 'Fetch all missing' button)
         cfa_in = gr.Textbox(visible=False)
         cfa_out = gr.Textbox(visible=False)
         cfa_btn = gr.Button(visible=False)
@@ -4184,8 +4184,8 @@ def build_ui():
             .then(set_sampler, [sampler_dd], [sampler_status]) \
             .then(set_schedule, [schedule_dd], [sampler_status])
 
-        # Vary (facon Fooocus): 1 clic arme un img2img pur (ESRGAN off) a denoise fixe,
-        # ouvre le panneau Input Image, et laisse l'utilisateur presser Generate.
+        # Vary (Fooocus style): one click arms a pure img2img (ESRGAN off) at a fixed
+        # denoise, opens the Input Image panel, and leaves the user to press Generate.
         def _ui_vary(d):
             return (gr.update(value=True), gr.update(value=False), gr.update(value=True),
                     gr.update(value=float(d)),

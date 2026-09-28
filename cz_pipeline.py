@@ -1572,7 +1572,7 @@ def free_vram():
     _BASE_PIPE = None
     _DERIVED = {}
     _LOADED_KEY = None
-    _APPLIED_LORAS = []      # plus de pipe -> plus d'adaptateur pose
+    _APPLIED_LORAS = []      # no pipe any more -> no adapter applied either
     _APPLIED_LOKRS = []      # ... nor of weights where a LoKr would be merged
     _TEXT_ENCODER_ACTIVE = ""  # ... nor of a replacement encoder loaded
     _embed_cache_clear(" (VRAM freed)")
@@ -2550,7 +2550,7 @@ def _lokr_scale(mod, rank):
 
 
 def _lokr_delta(mod):
-    """dW float32 d'un module LoKr."""
+    """A LoKr module's float32 dW."""
     if "lokr_t2" in mod:
         raise ValueError("lokr_t2 (convolution factor) is not supported here")
     w1, r1 = _lokr_factor(mod, "w1")
@@ -3112,7 +3112,7 @@ def _parse_ratio(spec):
 
 
 def _crop_to_ratio(image, ratio_w, ratio_h):
-    """Recadre (centre) l'image au ratio ratio_w:ratio_h en gardant l'aire maximale."""
+    """Centre-crops the image to the ratio_w:ratio_h ratio, keeping the largest area."""
     image = image.convert("RGB")
     w, h = image.size
     target = float(ratio_w) / float(ratio_h)
@@ -3206,7 +3206,7 @@ MODEL_TARGET_PX = 1024 * 1024
 
 
 def _ratio_canvas(ratio_w, ratio_h, target_px=MODEL_TARGET_PX):
-    """Dimensions (multiples de 32) d'un canevas au ratio donne, a ~target_px pixels."""
+    """A canvas's size (multiples of 32) at the given ratio, around target_px pixels."""
     r = float(ratio_w) / float(ratio_h)
     nh = (target_px / r) ** 0.5
     nw = nh * r
