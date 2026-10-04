@@ -22,6 +22,29 @@ accepted (`register_output_dir`, called where the runtime path is already allow-
 the configured folder is registered at import so the common case needs nothing. A path
 climbing out of the folder was already refused and still is.
 
+## Unreleased — LoRA: every file in the folder now loads, or says why not
+
+Three more shapes diffusers' Krea 2 converter cannot read, on top of the alphas (below).
+It walks the keys matching `\.lora_[AB]\.weight$`, maps them and pops them; anything else
+survives the conversion and dies on `state_dict should be empty at this point`.
+
+- the **`lora_down`/`lora_up` form**, which it never matches → renamed to `lora_A`/`lora_B`.
+  When the modules already carry their **diffusers names** under the non-diffusers
+  `diffusion_model.` prefix, the prefix becomes `transformer.` and the file is in its final
+  form, skipping the conversion; with the trainer names (`blocks.N.attn.wq`) the prefix has
+  to stay, or the converter can no longer map `wq` → `to_q`.
+- the **`.diff` / `.diff_b` keys** (LyCORIS direct weight/bias deltas): not a LoRA pair,
+  nothing in the peft path can apply them, and leaving them in fails the whole file. They
+  are dropped, and the log says how many.
+- **3 Z-Image LoRAs** sitting in the Krea 2 folder. Nothing to repair there: their blocks
+  (`layers.N.attention.to_q`, `adaLN_modulation`) have no counterpart in Krea 2.
+  `foreign_lora_reason` recognises them from the header alone and skips them with a line
+  saying what the file is — instead of a failed hot-swap and a **full model reload on every
+  render** while the slot stayed selected.
+
+Swept over the whole folder: **496 files → 479 convert, 14 LoKr on their own merge path, 3
+refused with a reason, 0 unexplained failures.**
+
 ## Unreleased — LoRA: the Krea 2 trainers' alphas no longer block the load
 
 diffusers' Krea 2 converter walks the `.lora_A`/`.lora_B` keys, maps them

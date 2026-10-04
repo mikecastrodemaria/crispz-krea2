@@ -132,6 +132,88 @@ def test_meta_params_detects_a_meta_module():
     assert P._meta_params(None) == []
 
 
+def _down_up_sd(n_blocks=1, diffusers_form=False, with_diff_b=False):
+    """The other two shapes the Krea 2 converter cannot read: the lora_down/lora_up form
+    (it matches only `\.lora_[AB]\.weight$`), and a file already written with the
+    DIFFUSERS module names under the non-diffusers 'diffusion_model.' prefix."""
+    sd = {}
+    for i in range(n_blocks):
+        mods = (("transformer_blocks", "attn.to_q"), ("transformer_blocks", "ff.gate"))             if diffusers_form else (("blocks", "attn.wq"), ("blocks", "mlp.gate"))
+        for block, mod in mods:
+            base = f"diffusion_model.{block}.{i}.{mod}"
+            sd[f"{base}.lora_down.weight"] = torch.randn(RANK, DIM)
+            sd[f"{base}.lora_up.weight"] = torch.randn(DIM, RANK)
+            sd[f"{base}.alpha"] = torch.tensor(float(RANK))
+        if with_diff_b:
+            sd[f"diffusion_model.{mods[0][0]}.{i}.{mods[0][1]}.diff_b"] = torch.zeros(DIM)
+    return sd
+
+
+def test_down_up_is_renamed_to_lora_a_b():
+    sd, _ = P.fold_lora_alpha(_down_up_sd())
+    out, renamed, dropped = P._to_diffusers_form(sd, rename_prefix=False)
+    assert renamed == 4 and dropped == 0, (renamed, dropped)
+    assert not [k for k in out if ".lora_down." in k or ".lora_up." in k]
+    # the trainer names must KEEP their prefix, or the converter can no longer map wq -> to_q
+    assert all(k.startswith("diffusion_model.") for k in out), out
+
+
+def test_the_diffusers_form_gets_the_transformer_prefix():
+    sd = _down_up_sd(diffusers_form=True)
+    assert P._is_diffusers_form(sd) is True
+    assert P._is_diffusers_form(_down_up_sd()) is False      # trainer names
+    out, _, _ = P._to_diffusers_form(sd, rename_prefix=True)
+    assert all(k.startswith("transformer.") for k in out), out
+
+
+def test_direct_weight_deltas_are_dropped():
+    """A '.diff_b' is a raw bias delta (LyCORIS), not a LoRA pair: nothing in the peft path
+    can apply it, and leaving it in makes the whole conversion fail."""
+    sd = _down_up_sd(with_diff_b=True)
+    out, _, dropped = P._to_diffusers_form(sd, rename_prefix=False)
+    assert dropped == 1 and not [k for k in out if k.endswith(".diff_b")]
+
+
+def test_lora_source_handles_the_down_up_file():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "dn.safetensors")
+    save_file(_down_up_sd(diffusers_form=True), p)
+    src, kw = P._lora_source(p)
+    assert isinstance(src, dict) and kw == {}
+    assert not [k for k in src if k.endswith(".alpha") or ".lora_down." in k]
+    assert all(k.startswith("transformer.") for k in src)
+
+
+def test_a_zimage_lora_is_refused_with_a_reason():
+    """A Z-Image LoRA in the Krea 2 folder: nothing to repair, it cannot apply."""
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "zimage.safetensors")
+    sd = {}
+    for mod in ("attention.to_q", "attention.to_out.0", "adaLN_modulation.0"):
+        sd[f"diffusion_model.layers.0.{mod}.lora_A.weight"] = torch.zeros(RANK, DIM)
+        sd[f"diffusion_model.layers.0.{mod}.lora_B.weight"] = torch.zeros(DIM, RANK)
+    save_file(sd, p)
+    why = P.foreign_lora_reason(p)
+    assert why and "Z-Image" in why and "Krea 2" in why, why
+
+
+def test_a_krea2_lora_is_not_flagged():
+    d = tempfile.mkdtemp()
+    for name, sd in (("trainer.safetensors", _trainer_sd(n_blocks=1)),
+                     ("diffusers.safetensors", _down_up_sd(diffusers_form=True))):
+        p = os.path.join(d, name)
+        save_file(sd, p)
+        assert P.foreign_lora_reason(p) == "", name
+
+
+def test_an_unreadable_file_is_left_to_diffusers():
+    d = tempfile.mkdtemp()
+    p = os.path.join(d, "broken.safetensors")
+    with open(p, "wb") as f:
+        f.write(b"garbage")
+    assert P.foreign_lora_reason(p) == ""          # must not raise, must not accuse
+
+
 if __name__ == "__main__":
     for fn in (test_fold_scales_the_up_weight_and_removes_the_key,
                test_fold_keeps_the_product_identical,
@@ -140,7 +222,14 @@ if __name__ == "__main__":
                test_lora_source_leaves_a_healthy_file_on_the_tested_path,
                test_unreadable_file_falls_back_to_the_path,
                test_folded_dict_passes_the_diffusers_converter,
-               test_meta_params_detects_a_meta_module):
+               test_meta_params_detects_a_meta_module,
+               test_down_up_is_renamed_to_lora_a_b,
+               test_the_diffusers_form_gets_the_transformer_prefix,
+               test_direct_weight_deltas_are_dropped,
+               test_lora_source_handles_the_down_up_file,
+               test_a_zimage_lora_is_refused_with_a_reason,
+               test_a_krea2_lora_is_not_flagged,
+               test_an_unreadable_file_is_left_to_diffusers):
         fn()
         print(f"OK {fn.__name__}")
     print("All Krea 2 LoRA alpha tests passed.")

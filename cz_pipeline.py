@@ -1675,6 +1675,43 @@ def release_vram(offload=False, why=""):
 
 
 # ----------------------------------------------------------------------------
+# A LoRA trained for ANOTHER architecture.
+#
+# A Z-Image or SD/SDXL LoRA dropped in the Krea 2 folder is not a file to repair: its
+# blocks have no counterpart here. Handed to diffusers it dies at the end of the conversion
+# on "state_dict should be empty at this point" followed by its whole key list, which the
+# UI reports as a failed hot-swap and pays for with a full model reload -- on every render,
+# since the slot stays selected.
+# Recognising it costs one header read (no tensor). Krea 2 names its blocks
+# blocks.N.attn.{wq,wk,wv,wo,gate} / mlp.* (trainer) or transformer_blocks.N.attn.to_* /
+# ff.* (diffusers); none of the markers below exist in either.
+_FOREIGN_LORA_MARKERS = (
+    ("Z-Image", ("adaLN_modulation", ".attention.to_", ".attention.qkv", ".attention.out")),
+    ("Stable Diffusion / SDXL", ("input_blocks", "middle_block", "output_blocks",
+                                 "down_blocks", "mid_block", "up_blocks")),
+)
+
+
+def foreign_lora_reason(path):
+    """'' when the file can be handed to diffusers, otherwise a one-line reason to log and
+    skip it. Unreadable files return '' -- diffusers reports those better than we would."""
+    try:
+        from safetensors import safe_open
+        with safe_open(path, framework="pt") as f:
+            keys = list(f.keys())
+    except Exception as e:
+        _dbg(f"LoRA architecture check skipped for {os.path.basename(path)}: {e}")
+        return ""
+    for arch, markers in _FOREIGN_LORA_MARKERS:
+        seen = sorted({m for m in markers if any(m in k for k in keys)})
+        if seen:
+            return (f"it is a {arch} LoRA (its keys name "
+                    + ", ".join(seen) + "). Nothing in it maps onto Krea 2 -- "
+                    "move it out of the Krea 2 LoRA folder.")
+    return ""
+
+
+# ----------------------------------------------------------------------------
 # Repairing the LoRA state_dict for Krea 2.
 #
 # diffusers' Krea 2 converter (_convert_non_diffusers_krea2_lora_to_diffusers) walks the
@@ -1713,6 +1750,51 @@ def fold_lora_alpha(sd):
     return sd, folded
 
 
+# A trainer that already writes the DIFFUSERS module names (transformer_blocks.N.attn.to_q,
+# attn.to_out.0, ff.gate...) but under the non-diffusers 'diffusion_model.' prefix and in
+# the lora_down/lora_up form. That prefix routes the file to the Krea 2 converter, which
+# reads only '.lora_[AB].weight' and maps only the TRAINER names (blocks.N.attn.wq): every
+# key survives it -> "state_dict should be empty at this point". Renaming to the final
+# diffusers form ('transformer.' + lora_A/lora_B) skips the conversion altogether.
+_KREA2_DIFFUSERS_PREFIX = "diffusion_model."
+_KREA2_DIFFUSERS_BLOCKS = ("transformer_blocks.", "text_fusion.")
+
+
+def _is_diffusers_form(sd):
+    """True when the modules already carry their diffusers names under 'diffusion_model.'."""
+    return any(k.startswith(_KREA2_DIFFUSERS_PREFIX)
+               and k[len(_KREA2_DIFFUSERS_PREFIX):].startswith(_KREA2_DIFFUSERS_BLOCKS)
+               for k in sd)
+
+
+def _to_diffusers_form(sd, rename_prefix):
+    """Renames '.lora_down/.lora_up.weight' to '.lora_A/.lora_B.weight' -- the Krea 2
+    converter reads ONLY the lora_A/lora_B form, so a down/up file never gets consumed.
+
+    rename_prefix=True also turns 'diffusion_model.' into 'transformer.': only for a file
+    whose modules already carry their diffusers names, which is then in its final form and
+    skips the conversion. With the TRAINER names (blocks.N.attn.wq) the prefix has to stay,
+    otherwise the converter no longer recognises them and cannot map wq -> to_q.
+
+    Drops the '.diff'/'.diff_b' keys: those are direct weight/bias deltas (LyCORIS), not a
+    LoRA pair, and nothing in the peft path can apply them. Returns (sd, n_renamed,
+    n_dropped).
+"""
+    out, n, dropped = {}, 0, 0
+    for k, v in sd.items():
+        if k.endswith((".diff", ".diff_b")):
+            dropped += 1
+            continue
+        k2 = (k.replace(".lora_down.weight", ".lora_A.weight")
+               .replace(".lora_up.weight", ".lora_B.weight"))
+        if rename_prefix and k2.startswith(_KREA2_DIFFUSERS_PREFIX):
+            k2 = "transformer." + k2[len(_KREA2_DIFFUSERS_PREFIX):]
+        if k2 != k:
+            n += 1
+        out[k2] = v
+    return out, n, dropped
+
+
 def _lora_needs_repair(sd):
     """True for a Krea 2 LoRA whose '.alpha' keys the converter will leave behind: the
     trainer layout (blocks.N.attn|mlp.<module>) in the lora_A/lora_B form, WITH alphas.
@@ -1738,11 +1820,25 @@ def _lora_source(path):
     except Exception as e:                      # not a safetensors, unreadable: as before
         _dbg(f"LoRA pre-read skipped for {os.path.basename(path)}: {e}")
         return (os.path.dirname(path) or "."), {"weight_name": os.path.basename(path)}
-    if not _lora_needs_repair(sd):
+    diffusers_form = _is_diffusers_form(sd)
+    down_up = any(k.endswith((".lora_down.weight", ".lora_up.weight")) for k in sd)
+    extras = any(k.endswith((".diff", ".diff_b")) for k in sd)
+    if not (diffusers_form or down_up or extras or _lora_needs_repair(sd)):
         return (os.path.dirname(path) or "."), {"weight_name": os.path.basename(path)}
     sd, folded = fold_lora_alpha(sd)
-    _log(f"LoRA {os.path.basename(path)} repaired for diffusers: {folded} alpha folded "
-         f"into the up weights (the Krea 2 converter leaves them behind)")
+    what = [f"{folded} alpha folded into the up weights"] if folded else []
+    if diffusers_form or down_up or extras:
+        sd, renamed, dropped = _to_diffusers_form(sd, rename_prefix=diffusers_form)
+        if renamed:
+            what.append(f"{renamed} key(s) renamed to lora_A/lora_B"
+                        + (" + the diffusers prefix" if diffusers_form else ""))
+        if dropped:
+            what.append(f"{dropped} direct weight/bias delta(s) dropped (not applicable "
+                        f"through peft)")
+    if not what:
+        return (os.path.dirname(path) or "."), {"weight_name": os.path.basename(path)}
+    _log(f"LoRA {os.path.basename(path)} repaired for diffusers: " + ", ".join(what)
+         + " (its Krea 2 converter would have choked on them)")
     return sd, {}
 
 
@@ -2841,6 +2937,12 @@ def _apply_loras(pipe, force=False):
                 why = _lora_unsupported(p)
                 if why:
                     _log(f"LoRA SKIPPED, {os.path.basename(p)}: {why}")
+                    continue
+                # A LoRA for another architecture cannot apply here: skip it with a
+                # reason rather than letting diffusers fail and cost a full reload.
+                why = foreign_lora_reason(p)
+                if why:
+                    _log(f"LoRA ignored: {os.path.basename(p)} -- {why}")
                     continue
                 an = f"cz_lora_{i}"
                 _log(f"applying LoRA: {os.path.basename(p)} (weight {w})")
