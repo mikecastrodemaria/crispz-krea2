@@ -4,6 +4,35 @@ All notable changes to crispz-krea2. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
 
+## Unreleased — LoRA: the Krea 2 trainers' alphas no longer block the load
+
+diffusers' Krea 2 converter walks the `.lora_A`/`.lora_B` keys, maps them
+(`wq/wk/wv/wo/gate` → `to_q/to_k/to_v/to_out.0/to_gate`) and pops them — but it never pops
+the `.alpha` keys, and never applies them either. Any LoRA carrying alphas therefore died
+at the end of the conversion on `state_dict should be empty at this point but has
+...attn.gate.alpha`. The alphas are now folded into the up weights before the load, which
+removes the orphan keys **and** restores the scaling the converter was dropping (with no
+`.alpha` left, diffusers sets `lora_alpha = rank`, i.e. a runtime scale of 1.0).
+
+Measured on the whole folder: 6 files of 496 unblocked. A file diffusers already handles
+keeps the untouched folder + `weight_name` route, and a LoKr is never claimed by this path
+— those go through `_apply_lokrs_to`. Two gaps are left untouched because they are other
+bugs: 14 LoKr files (handled by the app's own merge path, not by diffusers) and 1 file in
+the `lora_down`/`lora_up` form, which that converter does not read at all.
+
+
+## Unreleased — LoRA: a meta parameter no longer poisons every later load
+
+A LoRA load can leave parameters on the `meta` device. One is terminal: `pipe.to(DEVICE)`
+raises `Cannot copy out of meta tensor; no data!`, and peft builds each adapter on the
+device of the layer it wraps, so every later LoRA inherits it and loops on *"copying from a
+non-meta parameter ... which is a no-op"*. `_meta_params` now checks the transformer
+**before** any `.to(DEVICE)`: a cached pipe is reloaded from disk, a fresh one is reloaded
+without any adapter (and without reusing the transformer override, which is where the meta
+parameter lives), so the render runs LoRA-free rather than not at all. The hot-swap
+fallback also wipes the half-injected adapters instead of leaving them for the next load to
+reuse under the same `cz_lora_i` names.
+
 ## Unreleased — The app's own messages are in English
 
 Part of what the app printed was still French, inside an otherwise English interface:

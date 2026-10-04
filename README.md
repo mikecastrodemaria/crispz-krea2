@@ -48,7 +48,12 @@ SwarmUI. On top of crispz's upscaler it adds:
 - **Models**: one **Krea 2 model** dropdown merging the official base repos
   (Turbo / Raw) with single-file `.safetensors` from a main **and** an optional
   extra folder, a **Transformer override** (a diffusers repo/folder),
-  and **multi-LoRA** (configurable **1–10 slots** + trigger words). Picking a model also
+  and **multi-LoRA** (configurable **1–10 slots** + trigger words). A Krea 2 LoRA
+  carrying `.alpha` keys has them **folded into its up weights before the load**:
+  diffusers' Krea 2 converter never consumes those keys (the load died on `state_dict
+  should be empty at this point`) and never applied that scaling either. Files it already
+  handles keep the untouched path, LoKr files are left to their own merge path, and a
+  console line says what was repaired. Picking a model also
   auto-syncs the Performance preset. NB Krea 2: diffusers has no `from_single_file`
   for `Krea2Transformer2DModel`, so Civitai `.safetensors` load through **our own
   conversion** — the checkpoint (bf16 **or** ComfyUI FP8/INT8 "scaled", ConvRot
