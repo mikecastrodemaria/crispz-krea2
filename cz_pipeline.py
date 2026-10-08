@@ -3377,7 +3377,7 @@ def set_force_ratio(spec):
 
 
 def set_force_ratio_mode(mode):
-    """'crop' (recadrage centre) ou 'extend' (outpaint -- indisponible sur Krea 2)."""
+    """'crop' (centre crop) or 'extend' (outpaint -- not available on Krea 2)."""
     global FORCE_RATIO_MODE
     FORCE_RATIO_MODE = "extend" if str(mode or "").strip().lower() == "extend" else "crop"
     _log(f"force ratio mode -> {FORCE_RATIO_MODE}")
@@ -3672,7 +3672,7 @@ def _refine_whole(pipe, image, denoise, steps, prompt, seed):
     h = round_to_multiple(image.height, 16)
     # Two attempts at most: the VRAM guard at the first step (see generate), then a retry in 'model'.
     for _attempt in (0, 1):
-        _set_slicing(pipe, max(image.size))   # a reposer sur le pipe recharge du retry
+        _set_slicing(pipe, max(image.size))   # to set again on the pipe the retry reloaded
         out = _qwen_call(
             pipe,
             prompt=prompt or "",
