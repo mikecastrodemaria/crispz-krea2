@@ -4,6 +4,19 @@ All notable changes to crispz-krea2. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
 
+## Unreleased — The LoRA library can live outside the app folder
+
+`loras_dir` was the only folder the app ever looked in. A library shared with ComfyUI or
+Forge — the normal setup — meant moving it or keeping a second copy.
+
+`loras_extra_dirs` (config, preferences, or the env var `LORAS_EXTRA_DIRS` as 'a;b') is
+merged with `loras_dir` into a single list, and everything reads that list: the slots,
+the listing, the Asset Browser catalogue and the CivitAI enrichment. On a duplicate file
+name the main folder wins, so a LoRA of your own is never shadowed by one from a shared
+library. Models > LoRA carries the field, applied live and persisted.
+
+Ported from crispz-klein. Tests in `tests/test_lora_extra_dirs.py`.
+
 ## Unreleased — A card that refuses an offload mode no longer ends in a traceback
 
 In offload `none` the whole model is copied onto the card at once. With a big model that

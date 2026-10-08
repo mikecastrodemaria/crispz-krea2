@@ -152,6 +152,54 @@ CHECKPOINTS_EXTRA_DIR = (os.environ.get("CHECKPOINTS_EXTRA_DIR") or _prefs.get("
                          or CONFIG.get("checkpoints_extra_dir") or "").strip()
 LORAS_DIR = (os.environ.get("LORAS_DIR") or _prefs.get("loras_dir")
              or CONFIG.get("loras_dir") or os.path.join(HERE, "loras"))
+
+
+def _split_dirs(spec):
+    """Folder list from a JSON list or from an 'a;b' string (os.pathsep or ';')."""
+    if not spec:
+        return []
+    if isinstance(spec, str):
+        parts = [p for chunk in spec.split(os.pathsep) for p in chunk.split(";")]
+    else:
+        parts = list(spec)
+    out = []
+    for p in parts:
+        p = str(p or "").strip()
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
+# EXTRA LoRA folders (e.g. the Civitai library shared with other tools): env
+# LORAS_EXTRA_DIRS ('a;b') > preferences > config 'loras_extra_dirs'. Merged with
+# LORAS_DIR into a single list; on a duplicate name, LORAS_DIR wins.
+LORAS_EXTRA_DIRS = _split_dirs(os.environ["LORAS_EXTRA_DIRS"] if "LORAS_EXTRA_DIRS" in os.environ
+                               else (_prefs.get("loras_extra_dirs")
+                                     or CONFIG.get("loras_extra_dirs")))
+
+
+def _lora_dirs():
+    """LoRA folders to scan: the main one + the extras, deduplicated, in priority order."""
+    dirs = [LORAS_DIR]
+    for d in LORAS_EXTRA_DIRS:
+        if d and d not in dirs:
+            dirs.append(d)
+    return dirs
+
+
+def resolve_lora_path(name):
+    """Path of a LoRA from a slot name: an absolute path as is, otherwise the relative
+    name (subfolders included) looked up in LORAS_DIR then in the extras. Absent
+    everywhere, the path inside LORAS_DIR (the caller reports 'not found')."""
+    name = str(name or "")
+    if os.path.isabs(name):
+        return name
+    for d in _lora_dirs():
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return os.path.join(LORAS_DIR, name)
+
 # Active LoRAs: a list of (path, weight). Several LoRAs can be combined (multi-slot).
 LORAS = []
 LORA_WEIGHT = float(CONFIG.get("default_lora_weight", 1.0))  # the slots' default weight
@@ -1362,15 +1410,18 @@ def list_loras():
     included). Returns paths RELATIVE to LORAS_DIR with '/' (e.g.
     'subfolder/my_lora.safetensors') -> set_loras / resolve resolve them through
     os.path.join(LORAS_DIR, name)."""
-    if not os.path.isdir(LORAS_DIR):
-        return []
     exts = (".safetensors", ".ckpt", ".pt")
-    out = []
-    for root, _dirs, files in os.walk(LORAS_DIR):
-        for f in files:
-            if f.lower().endswith(exts):
-                rel = os.path.relpath(os.path.join(root, f), LORAS_DIR).replace(os.sep, "/")
-                out.append(rel)
+    out, seen = [], set()
+    for d in _lora_dirs():          # main then extras: same name -> the main one wins
+        if not os.path.isdir(d):
+            continue
+        for root, _dirs, files in os.walk(d):
+            for f in files:
+                if f.lower().endswith(exts):
+                    rel = os.path.relpath(os.path.join(root, f), d).replace(os.sep, "/")
+                    if rel.lower() not in seen:
+                        seen.add(rel.lower())
+                        out.append(rel)
     return sorted(out)
 
 
@@ -1390,6 +1441,13 @@ def set_loras_dir(path):
     global LORAS_DIR
     if path:
         LORAS_DIR = path
+
+
+def set_loras_extra_dirs(spec):
+    """Sets (or clears with '' / [] / None) the extra LoRA folders.
+    spec = a list or an 'a;b' string."""
+    global LORAS_EXTRA_DIRS
+    LORAS_EXTRA_DIRS = _split_dirs(spec)
 
 
 def _read_safetensors_metadata(path):
@@ -1449,7 +1507,7 @@ def set_loras(slots):
     new = []
     for name, weight in slots:
         if name and name not in ("None", "none", ""):
-            p = name if os.path.isabs(name) else os.path.join(LORAS_DIR, name)
+            p = resolve_lora_path(name)
             new.append((p, float(weight)))
     if new != LORAS:
         LORAS = new
