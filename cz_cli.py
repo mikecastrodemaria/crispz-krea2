@@ -68,6 +68,75 @@ def _keep_progress_task_alive():
     q.send_message = send_message
 
 
+def _tolerate_sse_reconnect():
+    """Stops the 'HTTPException: 404' / 'Caught handled exception, but response already
+    started' tracebacks on GET /queue/data.
+
+    The browser keeps one SSE stream open per session_hash. When it drops (a long blocking
+    render freezes the event loop, the tab reloads, a proxy times out), gradio.routes
+    deletes pending_messages_per_session[session_hash] on the CancelledError. The client
+    then reconnects to /queue/data with the SAME hash without re-joining the queue, the
+    entry is gone, and sse_stream raises a 404 after the headers went out -> the ugly
+    RuntimeError, and the tab never gets the remaining progress / the final result.
+
+    Fix: re-register the session entry (exactly what /queue/join does) before handing the
+    request to Gradio's own endpoint. Running events keep pushing into it, so the UI
+    resumes instead of staying frozen. Same approach as the two patches above: wrap the
+    symbol (App.create_app), keep Gradio's behaviour otherwise.
+    """
+    try:
+        import fastapi
+        from queue import Queue as ThreadQueue
+        from gradio import routes
+    except Exception as e:
+        print(f"[crispz] SSE reconnect guard not applied: {e}", file=sys.stderr)
+        return
+    App = getattr(routes, "App", None)
+    original_create = getattr(App, "create_app", None)
+    if App is None or original_create is None or getattr(original_create, "_cz_guarded", False):
+        return
+
+    def _find_route(routes):
+        # FastAPI >= 0.13x wraps include_router() in an _IncludedRouter whose APIRoutes
+        # live in .original_router.routes (path without the prefix); older versions put
+        # the prefixed APIRoute straight into app.router.routes. Handle both.
+        for r in routes:
+            if getattr(r, "path", "").endswith("/queue/data")                     and "GET" in (getattr(r, "methods", None) or ()):
+                return r
+            sub = getattr(getattr(r, "original_router", None), "routes", None)                 or getattr(r, "routes", None)
+            if sub and sub is not routes:
+                found = _find_route(sub)
+                if found is not None:
+                    return found
+        return None
+
+    def create_app(*a, **k):
+        app = original_create(*a, **k)
+        route = _find_route(app.router.routes)
+        if route is None:
+            print("[crispz] SSE reconnect guard: /queue/data route not found", file=sys.stderr)
+            return app
+        original_endpoint = route.endpoint
+        prefix = getattr(routes, "API_PREFIX", "/gradio_api")
+        path = route.path if route.path.startswith(prefix) else prefix + route.path
+
+        async def queue_data(request: fastapi.Request, session_hash: str):
+            q = app.get_blocks()._queue
+            if session_hash not in q.pending_messages_per_session:
+                q.pending_messages_per_session[session_hash] = ThreadQueue()
+            q.pending_event_ids_session.setdefault(session_hash, set())
+            return await original_endpoint(request, session_hash)
+
+        # Registered FIRST so it wins the match; Gradio's own route stays behind, unused.
+        app.add_api_route(path, queue_data, methods=["GET"],
+                          dependencies=list(route.dependencies or []))
+        app.router.routes.insert(0, app.router.routes.pop())
+        return app
+
+    create_app._cz_guarded = True
+    App.create_app = staticmethod(create_app)
+
+
 def _disable_brotli():
     """Neutralises Gradio's brotli_middleware (an h11 'Content-Length' bug when sending
     big results). Patched on the symbol gradio.routes imports."""
@@ -810,6 +879,7 @@ def cli_main(argv=None):
     if not args.cli and not args.input and not args.input_folder:
         _disable_brotli()  # avoids the h11 'Content-Length' bug when sending the results
         _keep_progress_task_alive()   # a dead tab must not kill the progress bar
+        _tolerate_sse_reconnect()     # a reconnecting tab must not 404 on /queue/data
         # + the model folders (LoRAs/checkpoints) to serve their previews in the Asset Browser
         _model_dirs = [p for p in (getattr(cz_pipeline, "LORAS_DIR", ""),
                                    getattr(cz_pipeline, "CHECKPOINTS_DIR", ""),
