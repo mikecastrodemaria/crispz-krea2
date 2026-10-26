@@ -598,7 +598,12 @@ in one list:
   then
 - every single-file `.safetensors` (and ComfyUI-GGUF `.gguf`) found in your **Checkpoints
   folder** **and** the optional **Extra checkpoints folder** (both merged into the same
-  list). They go through the conversion described above on their first load.
+  list), **subfolders included** — file your models as you like (`Krea/`, `Turbo/`, …): a
+  model in a subfolder is listed as `Krea/model.safetensors`, a root file keeps its bare
+  name, a local diffusers folder (with its `model_index.json`) is listed wherever it sits.
+  Caches (`.cache`, hidden folders) are skipped. They go through the conversion described
+  above on their first load. The same holds for the **LoRA** folders:
+  `Style/noir.safetensors` in the slots, `<lora:noir>` in the prompt.
 
 What each choice does:
 

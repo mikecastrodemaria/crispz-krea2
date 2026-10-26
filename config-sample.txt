@@ -130,7 +130,7 @@
     "refine_tile_denoise_cap": 0.4,
     "refine_tile_prompt": "",
     "checkpoints_dir": "",
-    "_checkpoints_extra_dir_help": "Optional SECOND checkpoints folder, merged into the same model list (e.g. a shared drive alongside your local one). Empty = only checkpoints_dir.",
+    "_checkpoints_extra_dir_help": "Optional SECOND checkpoints folder, merged into the same model list (e.g. a shared drive alongside your local one). Both folders are scanned recursively: a model in a subfolder is listed as 'ZIB/model.safetensors'. Empty = only checkpoints_dir.",
     "checkpoints_extra_dir": "",
     "_zimage_omni_model_help": "Read for family parity only: Krea 2 has no instruction-edit / Omni pipeline, so caps.supports.edit stays false, the Edit tab stays hidden and `czp edit` refuses with exit 3. A value here changes nothing.",
     "zimage_omni_model": "",
