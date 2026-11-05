@@ -44,19 +44,23 @@
     "_load_progress_help": "Live feedback while a model loads (first run downloads from HF = minutes of silence otherwise). Terminal shows a rewritten '[crispz][load] ... 45s | 3.2 GB in VRAM' line every heartbeat_s; the UI progress bar advances (VRAM allocated / target_vram_gb). enabled=false loads directly with no monitor thread (zero cost).",
     "caption_model": "blip-large",
     "_caption_model_help": "Auto-describe model: blip-large (default, local) | blip-base | ollama:<vision model> (listed in Prompt AI once Ollama is detected; blip-large takes over if Ollama fails)",
-    "_performance_presets_help": "name -> [steps, guidance] or [steps, guidance, lora_file]. A 3rd value applies that LoRA (slot 1) when the preset is selected. A distilled Lightning LoRA enables 8 steps + guidance 1 (no CFG) = fast & good. Put the LoRA in loras_dir and set its filename here.",
+    "_performance_presets_help": "name -> [steps, guidance] or [steps, guidance, lora]. A 3rd value applies that LoRA (slot 1, weight 1.0 for a step-distill LoRA) when the preset is selected. 'lora' = a file name in loras_dir, or 'owner/repo:file' = fetched from the Hugging Face Hub into loras_dir on first use. 'Turbo 3 steps' = the Krea 2 Turbo 3-step distill (3 steps, guidance 0.0, Turbo base only; 4-6 steps still fine, 8 or any guidance = a WARNING in the log). Leaving this out keeps the built-in presets.",
     "performance_presets": {
-        "Lightning (8 steps)": [
+        "Turbo (8 steps)": [
             8,
-            1.0,
-            "PUT_YOUR_LIGHTNING_LORA.safetensors"
+            0.0
         ],
-        "Balanced (24 steps)": [
-            24,
-            4.0
+        "Turbo 3 steps (distill LoRA)": [
+            3,
+            0.0,
+            "lvladikov/Krea2-Turbo-Distill-3step-LoRA:krea2_turbo_3step_rank_64_lora.safetensors"
         ],
-        "Quality (40 steps)": [
-            40,
+        "Quality (20 steps)": [
+            20,
+            0.0
+        ],
+        "Base CFG (28 steps)": [
+            28,
             4.0
         ]
     },
@@ -79,7 +83,7 @@
         "steps": 8,
         "guidance": 0.0
     },
-    "_default_loras_help": "LoRAs applied at startup (in loras_dir). Names or [name, weight]. Empty = none. Set a Lightning LoRA here + default_performance 'Lightning (8 steps)' + default_gen_steps 8 + default_guidance 1.0 for a fast default.",
+    "_default_loras_help": "LoRAs applied at startup. Names (in loras_dir), [name, weight] pairs, or 'owner/repo:file' (fetched from the Hugging Face Hub into loras_dir when absent). For a 3-step default: the Krea 2 Turbo 3-step distill here + default_performance 'Turbo 3 steps (distill LoRA)' + default_gen_steps 3 + default_guidance 0.0.",
     "default_loras": [],
     "_default_guidance_help": "Krea 2 convention: this drives guidance_scale DIRECTLY (velocity = cond + g*(cond-uncond); guidance is on as soon as g > 0). NOT the Qwen true_cfg_scale scheme. Turbo is distilled -> 0.0. Raw -> ~4.5.",
     "_default_refine_help": "Diffusion refine is UNAVAILABLE with Krea 2 (diffusers has no Krea2Img2ImgPipeline) -- the UI hides the refine controls. ESRGAN upscale still works: it does not go through the diffusion model.",

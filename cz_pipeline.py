@@ -40,6 +40,7 @@ import gc
 import sys
 import time
 import json
+import re as _re_mod
 import threading
 
 import numpy as np
@@ -201,6 +202,127 @@ def resolve_lora_path(name):
             return p
     return os.path.join(LORAS_DIR, name)
 
+# ----------------------------------------------------------------------------
+# Step-distill LoRAs. A LoRA that REPLACES the model's step count rather than adding a
+# style: Krea 2 Turbo's 3-step distill (lvladikov/Krea2-Turbo-Distill-3step-LoRA, rank 64
+# on 228 modules, distribution-matching distillation of the 8-step Turbo). It wants
+# 3 steps, guidance 0.0 and strength 1.0 on the TURBO base; stacking a style LoRA on top
+# and going to 4-6 steps is a normal use. 8 steps with it, or any guidance, is a mistake
+# worth a log line, not an error (the render still comes out). Not trained for Raw.
+#
+# Keyed by a lower-case file-name PREFIX: the author ships the same weights twice
+# (diffusers keys and '_comfyui' keys), and re-uploads rename them ('_lora_f16'...).
+# ----------------------------------------------------------------------------
+STEP_LORAS = {
+    "krea2_turbo_3step": {
+        "label": "Krea 2 Turbo 3-step distill",
+        "repo": "lvladikov/Krea2-Turbo-Distill-3step-LoRA",
+        "file": "krea2_turbo_3step_rank_64_lora.safetensors",
+        "steps": 3, "guidance": 0.0, "max_steps": 6, "base": "turbo",
+    },
+}
+# 'owner/repo:file.safetensors' = a LoRA fetched from the Hugging Face Hub into
+# LORAS_DIR on first use. Accepted wherever a LoRA name is (default_loras,
+# performance_presets, presets, the CLI).
+_HF_LORA_SPEC = _re_mod.compile(r"^([A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*):([^:\\/]+)$")
+
+
+def split_hf_lora_spec(spec):
+    """('owner/repo', 'file') for an 'owner/repo:file' LoRA spec, otherwise None."""
+    m = _HF_LORA_SPEC.match(str(spec or "").strip())
+    return (m.group(1), m.group(2)) if m else None
+
+
+def step_lora_for(name_or_path):
+    """The STEP_LORAS entry matching a LoRA file name (prefix match, case-insensitive),
+    otherwise None."""
+    base = os.path.basename(str(name_or_path or "")).lower()
+    for prefix, entry in STEP_LORAS.items():
+        if base.startswith(prefix):
+            return entry
+    return None
+
+
+def _download_hf_lora(repo, fname):
+    """Fetches `fname` from the HF repo `repo` straight into LORAS_DIR (a real file, not a
+    cache symlink) and returns its path. Raises on failure."""
+    from huggingface_hub import hf_hub_download
+    os.makedirs(LORAS_DIR, exist_ok=True)
+    _log(f"LoRA {fname}: downloading from {repo} into {LORAS_DIR} ...")
+    kw = {}
+    tok = (os.environ.get("HF_TOKEN") or CONFIG.get("hf_token") or "").strip()
+    if tok:
+        kw["token"] = tok
+    path = hf_hub_download(repo, fname, local_dir=LORAS_DIR, **kw)
+    _log(f"LoRA {fname}: downloaded ({os.path.getsize(path) / 1024**2:.0f} MB)")
+    return path
+
+
+def ensure_lora(spec, download=True):
+    """Turns a LoRA spec into a name resolve_lora_path understands, fetching the file when
+    it has to:
+      - 'owner/repo:file'  -> 'file', downloaded into LORAS_DIR when absent everywhere;
+      - a known step-distill LoRA's file name, absent locally -> downloaded from its repo;
+      - anything else      -> returned as is.
+    Returns the name, or None when the download failed (logged) or was refused
+    (download=False with the file absent)."""
+    spec = str(spec or "").strip()
+    hf = split_hf_lora_spec(spec)
+    if hf:
+        repo, fname = hf
+    else:
+        entry = step_lora_for(spec)
+        if not entry or os.path.basename(spec) != entry["file"]:
+            return spec or None
+        repo, fname = entry["repo"], entry["file"]
+    local = resolve_lora_path(fname)
+    if os.path.isfile(local):
+        return fname
+    if not download:
+        return None
+    try:
+        _download_hf_lora(repo, fname)
+    except Exception as e:
+        _log(f"LoRA {fname}: download from {repo} failed ({e}); not applied. "
+             f"Drop the file into {LORAS_DIR} by hand or check the HF token (gated repos).")
+        return None
+    return fname
+
+
+def active_step_lora(loras=None):
+    """The STEP_LORAS entry of the first active step-distill LoRA, or None."""
+    for p, _w in (LORAS if loras is None else loras):
+        e = step_lora_for(p)
+        if e:
+            return e
+    return None
+
+
+def step_lora_warning(steps, guidance, loras=None, model=None):
+    """A one-line warning when the active step-distill LoRA is used outside its recipe
+    (too many steps, guidance on, or the wrong base), otherwise None. The render goes on:
+    the author measured 4-6 steps as usable, so only the clearly-wrong cases are named."""
+    e = active_step_lora(loras)
+    if not e:
+        return None
+    why = []
+    if int(steps) > int(e.get("max_steps", e["steps"])):
+        why.append(f"{int(steps)} steps (it is distilled for {e['steps']}, up to "
+                   f"{e['max_steps']} usable)")
+    if abs(float(guidance) - float(e["guidance"])) > 1e-3:
+        why.append(f"guidance {float(guidance):g} (it wants {e['guidance']:g}: guidance "
+                   f"on breaks the distilled trajectory)")
+    base = e.get("base")
+    m = str(model if model is not None else (ZIMAGE_TRANSFORMER or BASE_REPO)).lower()
+    if base and "raw" in m and base not in m:
+        why.append("a Raw base (it is trained for Turbo only; on Raw keep its own CFG "
+                   "and 6-20 steps, or drop the LoRA)")
+    if not why:
+        return None
+    return (f"{e['label']} LoRA active with " + ", ".join(why)
+            + f" -- pick the Performance preset 'Turbo {e['steps']} steps (distill LoRA)'")
+
+
 # Active LoRAs: a list of (path, weight). Several LoRAs can be combined (multi-slot).
 LORAS = []
 LORA_WEIGHT = float(CONFIG.get("default_lora_weight", 1.0))  # the slots' default weight
@@ -231,8 +353,10 @@ for _spec in (CONFIG.get("default_loras") or []):
     _nm, _w = (_spec if isinstance(_spec, (list, tuple)) and len(_spec) == 2
                else (_spec, LORA_WEIGHT))
     if _nm and _nm not in ("None", "none"):
-        _p = _nm if os.path.isabs(_nm) else os.path.join(LORAS_DIR, _nm)
-        if os.path.isfile(_p):
+        # 'owner/repo:file' or a known step-distill LoRA -> fetched from HF when absent.
+        _nm = ensure_lora(_nm)
+        _p = (_nm if os.path.isabs(_nm) else resolve_lora_path(_nm)) if _nm else ""
+        if _p and os.path.isfile(_p):
             LORAS.append((_p, float(_w)))
 # Omni/Edit model: none on Krea 2 (no Qwen-Image-Edit equivalent). It stays empty ->
 # the corresponding tab does not appear (see omni_on in cz_ui). Kept as a variable because
@@ -1584,6 +1708,11 @@ def set_loras(slots):
     new = []
     for name, weight in slots:
         if name and name not in ("None", "none", ""):
+            # 'owner/repo:file' (or a known step-distill LoRA's name) is fetched from
+            # the HF Hub on first use; a failed download drops the slot, with a log line.
+            name = ensure_lora(name)
+            if not name:
+                continue
             p = resolve_lora_path(name)
             new.append((p, float(weight)))
     if new != LORAS:
@@ -3508,6 +3637,9 @@ def generate(prompt, width, height, steps, seed, negative_prompt=""):
     w = round_to_multiple(int(width))
     h = round_to_multiple(int(height))
     _log(f"txt2img: {w}x{h}, {int(steps)} steps, cfg {GUIDANCE:.1f} ...")
+    _warn = step_lora_warning(steps, GUIDANCE)
+    if _warn:
+        _log("WARNING: " + _warn)
     _dbg(f"txt2img seed={seed} dtype=bf16 device={DEVICE} offload={OFFLOAD_MODE} "
          f"transformer={'single-file' if ZIMAGE_TRANSFORMER else 'repo'}")
     if DEVICE == "cuda":

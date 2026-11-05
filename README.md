@@ -588,6 +588,36 @@ Both apply to the txt2img generation — the only diffusion path on Krea 2. CLI:
 `--sampler`, `--schedule`. For a **Raw** checkpoint the typical recipe is guidance 4.5,
 ~28 steps (Performance "Raw"), sampler `euler`, schedule `sgm_uniform` or `beta`.
 
+## Krea 2 Turbo in 3 steps (step-distill LoRA)
+
+[lvladikov/Krea2-Turbo-Distill-3step-LoRA](https://huggingface.co/lvladikov/Krea2-Turbo-Distill-3step-LoRA)
+is a rank-64 LoRA distilled from Krea 2 Turbo's 8-step trajectories: with it the Turbo
+renders in **3 steps** (about 2.6x faster denoising, the author measures slightly more
+fine texture than the 8-step teacher and some ghosting at 768×1024 / 1024×768). It is a
+LoRA, not a model: the base stays `krea/Krea-2-Turbo` (or any Turbo checkpoint; a FP8 /
+GGUF Turbo loses a little detail, as the author notes). **Not trained for Raw.**
+
+- **Performance → "Turbo 3 steps (distill LoRA)"** sets 3 steps, guidance 0.0 and puts
+  the LoRA in slot 1 at weight 1.0. The file (~440 MB) is **downloaded from the Hub into
+  `loras_dir` the first time** the preset is picked (an HF token is only needed if the repo
+  becomes gated). Slots 2+ are kept: a style LoRA on top (e.g. a character LoRA at 0.6)
+  and 4–6 steps is a normal use. The preset `Krea-2-Turbo-3step` (⭐ Presets) bundles
+  the same recipe with the Turbo base.
+- **Recipe**: 3 steps, guidance **0.0** (guidance on breaks the distilled trajectory),
+  `euler` / `sgm_uniform` (ComfyUI's `simple`), LoRA strength 1.0 (up to 1.5 tolerated).
+  Trained sizes go from 512×768 to 1440×1440 and 1824×1024.
+- **Guard**: when that LoRA is active with more than 6 steps, any guidance, or a Raw
+  base, the log says so (`WARNING: Krea 2 Turbo 3-step distill LoRA active with 8 steps
+  ...`) and the render still runs. The ComfyUI twin of the file (`..._comfyui...`) is
+  recognised too.
+- **`owner/repo:file`** is now accepted wherever a LoRA name is — `default_loras`,
+  `performance_presets`, `presets/*.json`, `--lora` — and fetched from the Hugging Face
+  Hub into `loras_dir` when absent. A failed download empties that slot with the reason
+  in the log; the steps/guidance of the preset still apply.
+- The file carries `.alpha` keys: they are folded into the up weights before the load (the
+  same effect as the author's `drop .alpha` snippet when alpha = rank, and the correct
+  scaling otherwise).
+
 ## Switching models in the UI (Advanced → Models)
 
 The **Krea 2 model** dropdown is the single place to switch model. It merges,

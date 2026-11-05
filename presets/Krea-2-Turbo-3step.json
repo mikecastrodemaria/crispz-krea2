@@ -1,0 +1,17 @@
+{
+  "prompt": "",
+  "negative": "",
+  "styles": [],
+  "width": 1024,
+  "height": 1024,
+  "steps": 3,
+  "guidance": 0.0,
+  "sampler": "euler",
+  "schedule": "sgm_uniform",
+  "image_number": 1,
+  "checkpoint": "krea/Krea-2-Turbo",
+  "transformer": "",
+  "loras": [
+    ["lvladikov/Krea2-Turbo-Distill-3step-LoRA:krea2_turbo_3step_rank_64_lora.safetensors", 1.0]
+  ]
+}
