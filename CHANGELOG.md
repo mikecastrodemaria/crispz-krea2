@@ -28,6 +28,17 @@ fetched the file, and nothing said when it was used at the Turbo's 8 steps.
 
 Tests in `tests/test_step_lora.py` (no GPU, no network).
 
+## Unreleased : performance presets and config.txt
+
+- A `performance_presets` list copied into config.txt used to replace the app's list
+  entirely, hiding every preset added since (seen on crispz-moss, 2026-11-07, fixed
+  across the family). Now the config's entries come first (they win on a name) and the
+  app's missing presets are appended, said in the log at start;
+  `performance_presets_merge: false` keeps the config's list alone.
+- The built-in list in `cz_ui.py` is the sample's Krea 2 list (Turbo 8 steps, Turbo 3 steps
+  with the distill LoRA, Quality 20, Base CFG 28), so a config.txt without
+  `performance_presets` and one with an old list both show the 3-step preset.
+
 ## Unreleased — The LoRA library can live outside the app folder
 
 `loras_dir` was the only folder the app ever looked in. A library shared with ComfyUI or

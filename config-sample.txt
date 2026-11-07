@@ -45,6 +45,8 @@
     "caption_model": "blip-large",
     "_caption_model_help": "Auto-describe model: blip-large (default, local) | blip-base | ollama:<vision model> (listed in Prompt AI once Ollama is detected; blip-large takes over if Ollama fails)",
     "_performance_presets_help": "name -> [steps, guidance] or [steps, guidance, lora]. A 3rd value applies that LoRA (slot 1, weight 1.0 for a step-distill LoRA) when the preset is selected. 'lora' = a file name in loras_dir, or 'owner/repo:file' = fetched from the Hugging Face Hub into loras_dir on first use. 'Turbo 3 steps' = the Krea 2 Turbo 3-step distill (3 steps, guidance 0.0, Turbo base only; 4-6 steps still fine, 8 or any guidance = a WARNING in the log). Leaving this out keeps the built-in presets.",
+    "_performance_presets_merge_help": "true (default): the app's own presets missing from your performance_presets are added after yours, so a config.txt copied from an older sample keeps showing the presets added since (said in the log). false: your list is the whole list.",
+    "performance_presets_merge": true,
     "performance_presets": {
         "Turbo (8 steps)": [
             8,
