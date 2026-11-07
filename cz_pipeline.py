@@ -155,12 +155,28 @@ LORAS_DIR = (os.environ.get("LORAS_DIR") or _prefs.get("loras_dir")
              or CONFIG.get("loras_dir") or os.path.join(HERE, "loras"))
 
 
+def _split_pathsep(spec):
+    """Splits an 'a;b' / 'a:b' folder string on ';' and on os.pathsep, WITHOUT cutting a
+    Windows drive letter: on Linux os.pathsep is ':', and 'X:/a' (a Windows library listed
+    in a config shared across machines, or the test suite) must stay one folder. A ':'
+    is a separator unless the piece before it is exactly one letter."""
+    parts, cur = [], ""
+    for ch in spec:
+        if ch == ";" or (ch == os.pathsep and not (len(cur) == 1 and cur.isalpha())):
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur)
+    return parts
+
+
 def _split_dirs(spec):
     """Folder list from a JSON list or from an 'a;b' string (os.pathsep or ';')."""
     if not spec:
         return []
     if isinstance(spec, str):
-        parts = [p for chunk in spec.split(os.pathsep) for p in chunk.split(";")]
+        parts = _split_pathsep(spec)
     else:
         parts = list(spec)
     out = []
@@ -236,7 +252,8 @@ def split_hf_lora_spec(spec):
 def step_lora_for(name_or_path):
     """The STEP_LORAS entry matching a LoRA file name (prefix match, case-insensitive),
     otherwise None."""
-    base = os.path.basename(str(name_or_path or "")).lower()
+    # Both separators: a Windows path from a preset or a queue file read on Linux.
+    base = _re_mod.split(r"[\\/]", str(name_or_path or ""))[-1].lower()
     for prefix, entry in STEP_LORAS.items():
         if base.startswith(prefix):
             return entry
