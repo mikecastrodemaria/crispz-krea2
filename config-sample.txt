@@ -45,6 +45,8 @@
     "caption_model": "blip-large",
     "_caption_model_help": "Auto-describe model: blip-large (default, local) | blip-base | ollama:<vision model> (listed in Prompt AI once Ollama is detected; blip-large takes over if Ollama fails)",
     "_performance_presets_help": "name -> [steps, guidance] or [steps, guidance, lora_file]. A 3rd value applies that LoRA (slot 1) when the preset is selected. A distilled Lightning LoRA enables 8 steps + guidance 1 (no CFG) = fast & good. Put the LoRA in loras_dir and set its filename here.",
+    "_performance_presets_merge_help": "true (default): the app's own presets missing from your performance_presets are added after yours, so a config.txt copied from an older sample keeps showing the presets added since (said in the log). false: your list is the whole list.",
+    "performance_presets_merge": true,
     "performance_presets": {
         "Lightning (8 steps)": [
             8,
