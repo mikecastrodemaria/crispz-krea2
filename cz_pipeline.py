@@ -48,6 +48,7 @@ import torch
 from PIL import Image
 
 import cz_core
+from cz_core import split_dir_spec  # noqa: E402
 from cz_core import (
     CONFIG, HERE, DEVICE, DTYPE,
     DEFAULT_TILE, DEFAULT_OVERLAP, DEFAULT_REFINE_TILE, DEFAULT_REFINE_OVERLAP,
@@ -155,36 +156,9 @@ LORAS_DIR = (os.environ.get("LORAS_DIR") or _prefs.get("loras_dir")
              or CONFIG.get("loras_dir") or os.path.join(HERE, "loras"))
 
 
-def _split_pathsep(spec):
-    """Splits an 'a;b' / 'a:b' folder string on ';' and on os.pathsep, WITHOUT cutting a
-    Windows drive letter: on Linux os.pathsep is ':', and 'X:/a' (a Windows library listed
-    in a config shared across machines, or the test suite) must stay one folder. A ':'
-    is a separator unless the piece before it is exactly one letter."""
-    parts, cur = [], ""
-    for ch in spec:
-        if ch == ";" or (ch == os.pathsep and not (len(cur) == 1 and cur.isalpha())):
-            parts.append(cur)
-            cur = ""
-        else:
-            cur += ch
-    parts.append(cur)
-    return parts
-
-
 def _split_dirs(spec):
-    """Folder list from a JSON list or from an 'a;b' string (os.pathsep or ';')."""
-    if not spec:
-        return []
-    if isinstance(spec, str):
-        parts = _split_pathsep(spec)
-    else:
-        parts = list(spec)
-    out = []
-    for p in parts:
-        p = str(p or "").strip()
-        if p and p not in out:
-            out.append(p)
-    return out
+    """Folder list from a JSON list or from an 'a;b' string (see cz_core.split_dir_spec)."""
+    return split_dir_spec(spec)      # cz_core: ';' and POSIX ':' split, drive colons kept
 
 
 # EXTRA LoRA folders (e.g. the Civitai library shared with other tools): env
