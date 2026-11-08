@@ -710,6 +710,50 @@ def _apply_checkpoint(name):
             gr.update(value=st), gr.update(value=g), _perf_update(st, g))
 
 
+# The Generate sliders' bounds, the single source for the sliders and for the CivitAI
+# consensus guard: a sidecar written before the median ignored zeros (or a page whose
+# images all publish "steps": 0) must never push a value the slider refuses.
+GEN_STEPS_BOUNDS = (2, 40)
+GUIDANCE_BOUNDS = (0.0, 8.0)
+
+
+def _sane_reco(reco, what="CivitAI consensus"):
+    """(steps or None, guidance or None) from a CivitAI 'recommended' dict, kept inside
+    the sliders' bounds. A zero or negative value is treated as absent (it is CivitAI's
+    "unknown"), a value above the slider's maximum is clamped; both are said in the log.
+    Seen on 2026-11-07 (crispz-moss): a sidecar with steps 0 put the steps slider at 0
+    (minimum 2) and Gradio refused every click after that ("Value 0 is less than minimum
+    value 2"). The same code lives in the whole family, hence the same guard here."""
+    reco = reco or {}
+    st = g = None
+    try:
+        if reco.get("steps") is not None:
+            st = int(reco["steps"])
+    except (TypeError, ValueError):
+        st = None
+    try:
+        if reco.get("guidance") is not None:
+            g = float(reco["guidance"])
+    except (TypeError, ValueError):
+        g = None
+    lo, hi = GEN_STEPS_BOUNDS
+    if st is not None and st < lo:
+        _log(f"{what}: steps {st} is not a usable value (slider minimum {lo}): ignored, "
+             "the model profile applies")
+        st = None
+    elif st is not None and st > hi:
+        _log(f"{what}: steps {st} clamped to the slider maximum {hi}")
+        st = hi
+    glo, ghi = GUIDANCE_BOUNDS
+    if g is not None and g <= 0:
+        _log(f"{what}: CFG {g} is not a usable value: ignored, the model profile applies")
+        g = None
+    elif g is not None and g > ghi:
+        _log(f"{what}: CFG {g} clamped to the slider maximum {ghi}")
+        g = ghi
+    return st, g
+
+
 def _ui_civitai_reco(name, progress=gr.Progress()):
     """Applies the CivitAI community settings to the current model (the consensus of the
     example images' 'meta': steps/CFG by median, the sampler by majority). Fetches the
@@ -742,15 +786,20 @@ def _ui_civitai_reco(name, progress=gr.Progress()):
     samp, sched = cz_civitai.map_sampler_name(reco.get("sampler"))
     parts = []
     st_u = g_u = gr.update()
-    if reco.get("steps") is not None:
-        st_u = gr.update(value=int(reco["steps"]))
-        parts.append(f"steps={reco['steps']}")
-    if reco.get("guidance") is not None:
+    r_st, r_g = _sane_reco(reco)
+    if r_st is not None:
+        st_u = gr.update(value=r_st)
+        parts.append(f"steps={r_st}")
+    elif reco.get("steps") is not None:
+        parts.append(f"steps={reco['steps']} (not usable, ignored)")
+    if r_g is None and reco.get("guidance") is not None:
+        parts.append(f"CFG={reco['guidance']} (not usable, ignored)")
+    if r_g is not None:
         # CivitAI publishes a STANDARD CFG (ComfyUI/A1111: 1.0 = no guidance). Krea 2
         # has its own convention (0.0 = no guidance, g = cfg - 1). Copied as it is, a
         # community 'cfg 1' became g = 1.0: CFG ENABLED on a distilled Turbo, two passes
         # per step. So we convert, and we say so.
-        g = cz_pipeline.guidance_from_standard_cfg(reco["guidance"])
+        g = cz_pipeline.guidance_from_standard_cfg(r_g)
         if g is not None:
             g_u = gr.update(value=g)
             parts.append(f"CFG={reco['guidance']} (ComfyUI) -> guidance {g:g} "
@@ -4046,10 +4095,10 @@ def build_ui():
                                               step=16, label="Width")
                             height = gr.Slider(256, 2048, value=int(CONFIG.get("default_height", 1024)),
                                                step=16, label="Height")
-                        gen_steps = gr.Slider(2, 40, value=int(CONFIG.get("default_gen_steps", 8)),
+                        gen_steps = gr.Slider(*GEN_STEPS_BOUNDS, value=int(CONFIG.get("default_gen_steps", 8)),
                                               step=1, label="Generation steps (txt2img)")
                         with gr.Row():
-                            guidance = gr.Slider(0.0, 8.0, value=float(CONFIG.get("default_guidance", 0.0)),
+                            guidance = gr.Slider(*GUIDANCE_BOUNDS, value=float(CONFIG.get("default_guidance", 0.0)),
                                                  step=0.5, label="CFG guidance", scale=2,
                                                  info="0 = Turbo (distilled, guidance off). Raw (non-distilled): ~4.5.")
                             sampler_dd = gr.Dropdown(
