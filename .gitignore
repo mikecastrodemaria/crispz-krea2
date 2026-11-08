@@ -57,6 +57,7 @@ wildcards/*.txt
 # --- Local presets (they reference your models). Only the example is versioned. ---
 presets/*.json
 !presets/example.json
+!presets/Krea-2-Turbo-3step.json
 
 # --- Outputs + logs ---
 out/

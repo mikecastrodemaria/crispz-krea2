@@ -105,6 +105,11 @@ python app.py --txt2img --prompt "..." --lora mystyle.safetensors:0.8
 # Several LoRAs + custom folder
 python app.py --txt2img --prompt "..." --loras-dir "D:/.../loras" \
     --lora char.safetensors:0.9 --lora style.safetensors:0.5
+
+# A LoRA from the Hugging Face Hub (owner/repo:file), downloaded into the loras dir
+# when absent: the Krea 2 Turbo 3-step distill -> 3 steps, guidance 0
+python app.py --txt2img --prompt "..." --steps 3 --guidance 0 \
+    --lora lvladikov/Krea2-Turbo-Distill-3step-LoRA:krea2_turbo_3step_rank_64_lora.safetensors:1.0
 ```
 
 ## Vision Mix (reference images → one prompt → generate)  — needs Ollama vision model

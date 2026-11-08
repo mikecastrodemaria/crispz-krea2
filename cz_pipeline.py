@@ -40,6 +40,7 @@ import gc
 import sys
 import time
 import json
+import re as _re_mod
 import threading
 
 import numpy as np
@@ -184,11 +185,134 @@ def resolve_lora_path(name):
     name = str(name or "")
     if os.path.isabs(name):
         return name
+    rel = name.replace("\\", "/").strip("/")
     for d in _lora_dirs():
-        p = os.path.join(d, name)
+        p = os.path.join(d, *rel.split("/")) if rel else d
         if os.path.isfile(p):
             return p
     return os.path.join(LORAS_DIR, name)
+
+# ----------------------------------------------------------------------------
+# Step-distill LoRAs. A LoRA that REPLACES the model's step count rather than adding a
+# style: Krea 2 Turbo's 3-step distill (lvladikov/Krea2-Turbo-Distill-3step-LoRA, rank 64
+# on 228 modules, distribution-matching distillation of the 8-step Turbo). It wants
+# 3 steps, guidance 0.0 and strength 1.0 on the TURBO base; stacking a style LoRA on top
+# and going to 4-6 steps is a normal use. 8 steps with it, or any guidance, is a mistake
+# worth a log line, not an error (the render still comes out). Not trained for Raw.
+#
+# Keyed by a lower-case file-name PREFIX: the author ships the same weights twice
+# (diffusers keys and '_comfyui' keys), and re-uploads rename them ('_lora_f16'...).
+# ----------------------------------------------------------------------------
+STEP_LORAS = {
+    "krea2_turbo_3step": {
+        "label": "Krea 2 Turbo 3-step distill",
+        "repo": "lvladikov/Krea2-Turbo-Distill-3step-LoRA",
+        "file": "krea2_turbo_3step_rank_64_lora.safetensors",
+        "steps": 3, "guidance": 0.0, "max_steps": 6, "base": "turbo",
+    },
+}
+# 'owner/repo:file.safetensors' = a LoRA fetched from the Hugging Face Hub into
+# LORAS_DIR on first use. Accepted wherever a LoRA name is (default_loras,
+# performance_presets, presets, the CLI).
+_HF_LORA_SPEC = _re_mod.compile(r"^([A-Za-z0-9][\w.-]*/[A-Za-z0-9][\w.-]*):([^:\\/]+)$")
+
+
+def split_hf_lora_spec(spec):
+    """('owner/repo', 'file') for an 'owner/repo:file' LoRA spec, otherwise None."""
+    m = _HF_LORA_SPEC.match(str(spec or "").strip())
+    return (m.group(1), m.group(2)) if m else None
+
+
+def step_lora_for(name_or_path):
+    """The STEP_LORAS entry matching a LoRA file name (prefix match, case-insensitive),
+    otherwise None."""
+    # Both separators: a Windows path from a preset or a queue file read on Linux.
+    base = _re_mod.split(r"[\\/]", str(name_or_path or ""))[-1].lower()
+    for prefix, entry in STEP_LORAS.items():
+        if base.startswith(prefix):
+            return entry
+    return None
+
+
+def _download_hf_lora(repo, fname):
+    """Fetches `fname` from the HF repo `repo` straight into LORAS_DIR (a real file, not a
+    cache symlink) and returns its path. Raises on failure."""
+    from huggingface_hub import hf_hub_download
+    os.makedirs(LORAS_DIR, exist_ok=True)
+    _log(f"LoRA {fname}: downloading from {repo} into {LORAS_DIR} ...")
+    kw = {}
+    tok = (os.environ.get("HF_TOKEN") or CONFIG.get("hf_token") or "").strip()
+    if tok:
+        kw["token"] = tok
+    path = hf_hub_download(repo, fname, local_dir=LORAS_DIR, **kw)
+    _log(f"LoRA {fname}: downloaded ({os.path.getsize(path) / 1024**2:.0f} MB)")
+    return path
+
+
+def ensure_lora(spec, download=True):
+    """Turns a LoRA spec into a name resolve_lora_path understands, fetching the file when
+    it has to:
+      - 'owner/repo:file'  -> 'file', downloaded into LORAS_DIR when absent everywhere;
+      - a known step-distill LoRA's file name, absent locally -> downloaded from its repo;
+      - anything else      -> returned as is.
+    Returns the name, or None when the download failed (logged) or was refused
+    (download=False with the file absent)."""
+    spec = str(spec or "").strip()
+    hf = split_hf_lora_spec(spec)
+    if hf:
+        repo, fname = hf
+    else:
+        entry = step_lora_for(spec)
+        if not entry or os.path.basename(spec) != entry["file"]:
+            return spec or None
+        repo, fname = entry["repo"], entry["file"]
+    local = resolve_lora_path(fname)
+    if os.path.isfile(local):
+        return fname
+    if not download:
+        return None
+    try:
+        _download_hf_lora(repo, fname)
+    except Exception as e:
+        _log(f"LoRA {fname}: download from {repo} failed ({e}); not applied. "
+             f"Drop the file into {LORAS_DIR} by hand or check the HF token (gated repos).")
+        return None
+    return fname
+
+
+def active_step_lora(loras=None):
+    """The STEP_LORAS entry of the first active step-distill LoRA, or None."""
+    for p, _w in (LORAS if loras is None else loras):
+        e = step_lora_for(p)
+        if e:
+            return e
+    return None
+
+
+def step_lora_warning(steps, guidance, loras=None, model=None):
+    """A one-line warning when the active step-distill LoRA is used outside its recipe
+    (too many steps, guidance on, or the wrong base), otherwise None. The render goes on:
+    the author measured 4-6 steps as usable, so only the clearly-wrong cases are named."""
+    e = active_step_lora(loras)
+    if not e:
+        return None
+    why = []
+    if int(steps) > int(e.get("max_steps", e["steps"])):
+        why.append(f"{int(steps)} steps (it is distilled for {e['steps']}, up to "
+                   f"{e['max_steps']} usable)")
+    if abs(float(guidance) - float(e["guidance"])) > 1e-3:
+        why.append(f"guidance {float(guidance):g} (it wants {e['guidance']:g}: guidance "
+                   f"on breaks the distilled trajectory)")
+    base = e.get("base")
+    m = str(model if model is not None else (ZIMAGE_TRANSFORMER or BASE_REPO)).lower()
+    if base and "raw" in m and base not in m:
+        why.append("a Raw base (it is trained for Turbo only; on Raw keep its own CFG "
+                   "and 6-20 steps, or drop the LoRA)")
+    if not why:
+        return None
+    return (f"{e['label']} LoRA active with " + ", ".join(why)
+            + f" -- pick the Performance preset 'Turbo {e['steps']} steps (distill LoRA)'")
+
 
 # Active LoRAs: a list of (path, weight). Several LoRAs can be combined (multi-slot).
 LORAS = []
@@ -220,8 +344,10 @@ for _spec in (CONFIG.get("default_loras") or []):
     _nm, _w = (_spec if isinstance(_spec, (list, tuple)) and len(_spec) == 2
                else (_spec, LORA_WEIGHT))
     if _nm and _nm not in ("None", "none"):
-        _p = _nm if os.path.isabs(_nm) else os.path.join(LORAS_DIR, _nm)
-        if os.path.isfile(_p):
+        # 'owner/repo:file' or a known step-distill LoRA -> fetched from HF when absent.
+        _nm = ensure_lora(_nm)
+        _p = (_nm if os.path.isabs(_nm) else resolve_lora_path(_nm)) if _nm else ""
+        if _p and os.path.isfile(_p):
             LORAS.append((_p, float(_w)))
 # Omni/Edit model: none on Krea 2 (no Qwen-Image-Edit equivalent). It stays empty ->
 # the corresponding tab does not appear (see omni_on in cz_ui). Kept as a variable because
@@ -1345,8 +1471,29 @@ def _checkpoint_dirs():
     return dirs
 
 
+# Folders never scanned for checkpoints (and LoRAs): tool caches and the Asset Browser's
+# own index. Mirrors _scan_catalog in cz_assetbrowser.
+_SKIP_MODEL_SUBDIRS = ("_index", ".cache", "recipes")
+_CHECKPOINT_EXTS = (".safetensors", ".ckpt", ".pt", ".sft", ".gguf")
+
+
+def _walk_model_files(d, exts):
+    """Yields (relative path with '/', absolute path) of every file under `d` whose name
+    ends with `exts`, RECURSIVELY, skipping _SKIP_MODEL_SUBDIRS and hidden folders. The
+    relative path is what the dropdowns show ('ZIB/model.safetensors')."""
+    if not d or not os.path.isdir(d):
+        return
+    for root, dirs, files in os.walk(d):
+        dirs[:] = sorted(x for x in dirs
+                         if x not in _SKIP_MODEL_SUBDIRS and not x.startswith("."))
+        for f in sorted(files):
+            if f.lower().endswith(exts):
+                fp = os.path.join(root, f)
+                yield os.path.relpath(fp, d).replace(os.sep, "/"), fp
+
+
 def list_checkpoints():
-    """Local diffusers folders usable as a Krea 2 base model.
+    """Local diffusers folders usable as a Krea 2 base model, and single-file models.
 
     Single-file .safetensors (Civitai bf16 and 'scaled' FP8/INT8) are offered, as are the
     ComfyUI-GGUF .gguf files (arch 'krea2'): everything goes through the CONVERSION to a
@@ -1355,63 +1502,118 @@ def list_checkpoints():
     stray LoRAs and SVDQuant (an INT4 scheme that cannot be dequantized), with the reason in
     the console.
 
-    A folder is only kept when it holds a model_index.json (the diffusers layout).
-    The official HF repos are added by the UI (ZIMAGE_BASE_REPOS), not here.
+    The checkpoints folders (main + extra) are scanned RECURSIVELY: an entry is the path
+    relative to its folder with '/' ('Krea/model.safetensors'), a root file keeps its bare
+    name; resolve_checkpoint turns it back into the absolute path. Caches, hidden folders
+    and _index are skipped. A folder is only kept when it holds a model_index.json (the
+    diffusers layout), and is not descended into. On a duplicate relative path, the main
+    folder wins. The official HF repos are added by the UI (ZIMAGE_BASE_REPOS), not here.
 """
     out, seen = [], set()
     for d in _checkpoint_dirs():
         if not os.path.isdir(d):
             continue
-        for f in sorted(os.listdir(d)):
-            p = os.path.join(d, f)
-            if os.path.isdir(p):
-                if f not in seen and os.path.isfile(os.path.join(p, "model_index.json")):
-                    seen.add(f)
-                    out.append(f)
-            elif f.lower().endswith(".safetensors"):
-                bad = _safetensors_unsupported(p)
-                if bad:
-                    _log(f"skipped {f}: {bad}")
-                elif f not in seen:
-                    seen.add(f)
-                    out.append(f)
-            elif f.lower().endswith(".gguf"):
-                if f not in seen:
-                    seen.add(f)
-                    out.append(f)
+        for root, dirs, files in os.walk(d):
+            keep = []
+            for x in sorted(dirs):
+                if x in _SKIP_MODEL_SUBDIRS or x.startswith("."):
+                    continue
+                sub = os.path.join(root, x)
+                if os.path.isfile(os.path.join(sub, "model_index.json")):
+                    rel = os.path.relpath(sub, d).replace(os.sep, "/")
+                    if rel.lower() not in seen:
+                        seen.add(rel.lower())
+                        out.append(rel)
+                    continue                     # a diffusers folder: not descended
+                keep.append(x)
+            dirs[:] = keep
+            for f in sorted(files):
+                fp = os.path.join(root, f)
+                rel = os.path.relpath(fp, d).replace(os.sep, "/")
+                if rel.lower() in seen:
+                    continue
+                if f.lower().endswith(".safetensors"):
+                    bad = _safetensors_unsupported(fp)
+                    if bad:
+                        _log(f"skipped {rel}: {bad}")
+                        continue
+                elif not f.lower().endswith(".gguf"):
+                    continue
+                seen.add(rel.lower())
+                out.append(rel)
     return sorted(out)
 
 
 def resolve_checkpoint(name):
-    """Absolute path of a single-file checkpoint from its file name, looked up in the
-    checkpoints folders (main then extra). Returns name as is when it is already absolute;
-    falls back to the main folder when not found."""
+    """Absolute path of a single-file checkpoint from a list_checkpoints entry (a path
+    relative to its folder, '/' or '\', subfolders included), looked up in the checkpoints
+    folders (main then extra). Returns name as is when it is already absolute. An entry that is
+    not at that path any more is then searched by its FILE NAME in every subfolder (a
+    preset, a queued job or an image's metadata saved before the model was filed away
+    keeps working); falls back to the main folder when not found. A folder entry (a diffusers layout,
+    model_index.json) resolves the same way."""
     if not name or os.path.isabs(name):
         return name
+    rel = str(name).replace("\\", "/").strip("/")
     for d in _checkpoint_dirs():
-        p = os.path.join(d, name)
-        if os.path.isfile(p):
+        p = os.path.join(d, *rel.split("/"))
+        if os.path.isfile(p) or os.path.isfile(os.path.join(p, "model_index.json")):
             return p
+    # Not at that path: a preset, a queued job or an image's metadata holds the name the
+    # model had when it was written, and the library may have been tidied since. Find it
+    # by its file name rather than answering 'not found' for a model that is right there.
+    found = checkpoint_by_basename(rel.rsplit("/", 1)[-1])
+    if found:
+        return found
     return os.path.join(CHECKPOINTS_DIR, name)
 
 
+def checkpoint_by_basename(fname):
+    """Absolute path of the checkpoint file named `fname` (case-insensitive) anywhere under
+    the checkpoints folders, or None. Several matches: the first one in listing order
+    (main folder first), with a log line."""
+    want = str(fname or "").lower()
+    hits = []
+    for d in _checkpoint_dirs():
+        for _rel, fp in _walk_model_files(d, _CHECKPOINT_EXTS):
+            if os.path.basename(fp).lower() == want:
+                hits.append(fp)
+    if len(hits) > 1:
+        _log(f"checkpoint '{fname}': {len(hits)} files share this name, using {hits[0]}")
+    return hits[0] if hits else None
+
+
+def checkpoint_relname(path):
+    """The list_checkpoints entry of an absolute checkpoint path (relative to the
+    checkpoints folder that holds it, '/'), or the bare file name when it lies outside
+    every folder. Used by the UI where a name has to match the catalogue."""
+    path = str(path or "")
+    if not path:
+        return ""
+    if not os.path.isabs(path):
+        path = resolve_checkpoint(path)
+    ap = os.path.normcase(os.path.abspath(path))
+    for d in _checkpoint_dirs():
+        if not d:
+            continue
+        base = os.path.normcase(os.path.abspath(d))
+        if ap.startswith(base.rstrip(os.sep) + os.sep):
+            return os.path.relpath(os.path.abspath(path), os.path.abspath(d)).replace(os.sep, "/")
+    return os.path.basename(path)
+
+
 def list_loras():
-    """LoRAs (.safetensors / .ckpt / .pt) from the loras folder, RECURSIVELY (subfolders
-    included). Returns paths RELATIVE to LORAS_DIR with '/' (e.g.
-    'subfolder/my_lora.safetensors') -> set_loras / resolve resolve them through
-    os.path.join(LORAS_DIR, name)."""
+    """LoRAs (.safetensors / .ckpt / .pt) from the loras folders (main + extras),
+    RECURSIVELY (subfolders included, caches and hidden folders skipped). Returns paths
+    RELATIVE to their folder with '/' (e.g. 'subfolder/my_lora.safetensors') -> set_loras /
+    resolve_lora_path resolve them through os.path.join(<folder>, name)."""
     exts = (".safetensors", ".ckpt", ".pt")
     out, seen = [], set()
     for d in _lora_dirs():          # main then extras: same name -> the main one wins
-        if not os.path.isdir(d):
-            continue
-        for root, _dirs, files in os.walk(d):
-            for f in files:
-                if f.lower().endswith(exts):
-                    rel = os.path.relpath(os.path.join(root, f), d).replace(os.sep, "/")
-                    if rel.lower() not in seen:
-                        seen.add(rel.lower())
-                        out.append(rel)
+        for rel, _fp in _walk_model_files(d, exts):
+            if rel.lower() not in seen:
+                seen.add(rel.lower())
+                out.append(rel)
     return sorted(out)
 
 
@@ -1497,6 +1699,11 @@ def set_loras(slots):
     new = []
     for name, weight in slots:
         if name and name not in ("None", "none", ""):
+            # 'owner/repo:file' (or a known step-distill LoRA's name) is fetched from
+            # the HF Hub on first use; a failed download drops the slot, with a log line.
+            name = ensure_lora(name)
+            if not name:
+                continue
             p = resolve_lora_path(name)
             new.append((p, float(weight)))
     if new != LORAS:
@@ -3421,6 +3628,9 @@ def generate(prompt, width, height, steps, seed, negative_prompt=""):
     w = round_to_multiple(int(width))
     h = round_to_multiple(int(height))
     _log(f"txt2img: {w}x{h}, {int(steps)} steps, cfg {GUIDANCE:.1f} ...")
+    _warn = step_lora_warning(steps, GUIDANCE)
+    if _warn:
+        _log("WARNING: " + _warn)
     _dbg(f"txt2img seed={seed} dtype=bf16 device={DEVICE} offload={OFFLOAD_MODE} "
          f"transformer={'single-file' if ZIMAGE_TRANSFORMER else 'repo'}")
     if DEVICE == "cuda":

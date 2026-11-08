@@ -160,13 +160,21 @@ def _aspect_resolve(name):
 # pixels can drift in composition there (a duplicated subject) -- to be chosen when the
 # recipe you follow asks for it, not by default.
 # Fooocus-style Performance -> (gen_steps, guidance) for the loaded model.
-# The built-in list IS the sample's (a stale Turbo 8 / Quality 20 / Base CFG 28 list stood
-# here until 2026-11-07, masked by config-sample.txt). The sample's Lightning preset names a
-# LoRA file the user fills in: no built-in LoRA tie here, only the step counts.
+# The built-in list IS the sample's (config-sample.txt), the Krea 2 one: Turbo 8, the 3-step
+# distill LoRA, Quality 20, Base CFG 28. Z-Image's Lightning / Balanced / Quality 40 left
+# with the Krea 2 port. A config.txt list is merged over it (_performance_from_config).
 PERFORMANCE = {
-    "Lightning (8 steps)": (8, 1.0),
-    "Balanced (24 steps)": (24, 4.0),
-    "Quality (40 steps)": (40, 4.0),
+    "Turbo (8 steps)":    (8, 0.0),
+    "Turbo 3 steps (distill LoRA)": (3, 0.0),
+    "Quality (20 steps)": (20, 0.0),
+    "Base CFG (28 steps)": (28, 4.0),
+}
+# The LoRA a preset carries (slot 1). 'owner/repo:file' = fetched from the HF Hub into
+# loras_dir the first time the preset is picked (cz_pipeline.ensure_lora). 'Turbo
+# 3 steps' = the 3-step step-distill of Krea 2 Turbo (3 steps, guidance 0.0, strength 1).
+DEFAULT_PERFORMANCE_LORA = {
+    "Turbo 3 steps (distill LoRA)":
+        "lvladikov/Krea2-Turbo-Distill-3step-LoRA:krea2_turbo_3step_rank_64_lora.safetensors",
 }
 # Styles. Fooocus format: name -> {"prompt": a template with {prompt} (or None),
 # "negative_prompt": str}. The real library is loaded from styles/*.json (see _load_styles
@@ -274,7 +282,7 @@ import json  # noqa: F811 (utilise par _load_styles ci-dessous)
 # Performance presets, editable through config.txt (performance_presets: name ->
 # [steps, guidance] or [steps, guidance, lora_filename] to tie a LoRA to the preset, e.g.
 # Lightning 8-step).
-PERFORMANCE_LORA = {}
+PERFORMANCE_LORA = dict(DEFAULT_PERFORMANCE_LORA)
 _BUILT_IN_PERFORMANCE = dict(PERFORMANCE)
 _BUILT_IN_PERFORMANCE_LORA = dict(PERFORMANCE_LORA)
 
@@ -1238,15 +1246,26 @@ def _set_performance(name, *slot_vals):
     Returns (steps, guidance, update(slot1_name), update(slot1_weight)).
 """
     steps, g = PERFORMANCE.get(name, (8, 0.0))
-    n1 = PERFORMANCE_LORA.get(name, "") or "None"
-    w1 = float(cz_pipeline.LORA_WEIGHT)
+    spec = PERFORMANCE_LORA.get(name, "") or ""
+    # 'owner/repo:file' -> the file name, downloaded into loras_dir when it is not there
+    # yet (a one-off, ~440 MB for the Krea 2 Turbo 3-step distill). A failed download
+    # leaves slot 1 empty, with the reason in the log, and the steps/guidance still apply.
+    n1 = (cz_pipeline.ensure_lora(spec) if spec else None) or "None"
+    # A step-distill LoRA is a correction, not a style: its trained point is 1.0,
+    # whatever the slots' default weight is.
+    w1 = 1.0 if cz_pipeline.step_lora_for(n1) else float(cz_pipeline.LORA_WEIGHT)
     pairs = [(n1, w1)] + [(slot_vals[i], slot_vals[i + 1])
                           for i in range(0, len(slot_vals) - 1, 2)]
     try:
         set_loras(pairs)
     except Exception as e:
         _log(f"performance preset LoRA apply failed: {e}")
-    return steps, g, gr.update(value=n1), gr.update(value=w1)
+    # The choices are refreshed too: a file that has just been downloaded is not in the
+    # dropdown yet, and Gradio drops a value it does not know.
+    choices = ["None"] + list_loras()
+    if n1 not in choices:
+        choices.append(n1)
+    return steps, g, gr.update(value=n1, choices=choices), gr.update(value=w1)
 
 
 # Negative Improve in the UI: hidden when the negative has no effect on the model.
@@ -1710,7 +1729,9 @@ def _asset_focus_url(kind, name):
         focus = name if name and name != "None" else ""            # list_loras -> a relative path
     else:  # models: the HF base repo = no local file -> no focus (the tab alone)
         if name and name not in ZIMAGE_BASE_REPOS:
-            focus = os.path.basename(name)                          # the models catalogue indexed by file name
+            # the models catalogue is indexed by the path relative to its folder
+            # ('ZIB/model.safetensors'), the same entry list_checkpoints shows.
+            focus = cz_pipeline.checkpoint_relname(name)
     url = "/gradio_api/file=" + os.path.abspath(idx).replace("\\", "/") + "?src=" + kind
     if focus:
         url += "&focus=" + urllib.parse.quote(focus)
@@ -3434,13 +3455,17 @@ def _ensure_model_presets(checkpoints):
     except Exception:
         existing = set()
     for f in checkpoints or []:
-        # Ignores the HF base repos (Tongyi-MAI/...): those are not local files.
-        if not isinstance(f, str) or f in ZIMAGE_BASE_REPOS or "/" in f or "\\" in f:
+        # Ignores the HF base repos (krea/...): those are not local files. A model filed
+        # in a subfolder ('Krea/model.safetensors') or a local diffusers folder gets a
+        # preset named after the file (or folder) alone.
+        if (not isinstance(f, str) or f in ZIMAGE_BASE_REPOS
+                or not (f.lower().endswith(cz_pipeline._CHECKPOINT_EXTS)
+                        or os.path.isdir(cz_pipeline.resolve_checkpoint(f)))):
             continue
-        name = _preset_sanitize(os.path.splitext(f)[0])
+        name = _preset_sanitize(os.path.splitext(os.path.basename(f))[0])
         if name in existing:
             continue
-        steps, g = profile_for_model(f)
+        steps, g = profile_for_model(os.path.basename(f))
         data = {
             "prompt": "",
             "negative": CONFIG.get("default_negative_prompt", "") or "",
@@ -3490,8 +3515,14 @@ def _ui_preset_load(name):
     """Returns the gr.update for every component (the scalars + 10 LoRA dds + 10 weights)."""
     data = _load_preset_file(name)
     scal = [gr.update(value=data[k]) if k in data else gr.update() for k in _PRESET_KEYS]
-    loras = data.get("loras", []) or []
-    dd_up = [gr.update(value=(loras[i][0] if i < len(loras) else "None")) for i in range(MAX_LORA_SLOTS)]
+    # An 'owner/repo:file' entry (the shipped Krea-2-Turbo-3step preset) is fetched from
+    # the HF Hub on first load and shown under its file name: a dropdown only takes a
+    # value it lists, so the choices are refreshed with the new file too.
+    loras = [[cz_pipeline.ensure_lora(l[0]) or "None", l[1]]
+             for l in (data.get("loras", []) or []) if l]
+    choices = ["None"] + list_loras()
+    dd_up = [gr.update(value=(loras[i][0] if i < len(loras) else "None"), choices=choices)
+             for i in range(MAX_LORA_SLOTS)]
     w_up = [gr.update(value=(float(loras[i][1]) if i < len(loras) else float(cz_pipeline.LORA_WEIGHT)))
             for i in range(MAX_LORA_SLOTS)]
     return scal + dd_up + w_up
