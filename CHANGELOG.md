@@ -4,6 +4,30 @@ All notable changes to crispz-krea2. One versioned entry per feature.
 The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browser tab title.
 
 
+## Unreleased — Krea 2 Turbo renders in 3 steps (step-distill LoRA)
+
+[lvladikov/Krea2-Turbo-Distill-3step-LoRA](https://huggingface.co/lvladikov/Krea2-Turbo-Distill-3step-LoRA)
+is a rank-64 LoRA distilled from the Turbo's 8-step trajectories: 3 steps instead of 8,
+guidance 0.0, strength 1.0, Turbo base only. It already loaded through a slot (its
+`.alpha` keys are folded like any Krea 2 LoRA), but nothing set the steps, nothing
+fetched the file, and nothing said when it was used at the Turbo's 8 steps.
+
+- Performance preset **"Turbo 3 steps (distill LoRA)"**: 3 steps, guidance 0.0, the LoRA
+  in slot 1 at 1.0, slots 2+ kept (a style LoRA on top at 4-6 steps is a normal use). A
+  matching ⭐ preset `Krea-2-Turbo-3step` ships in `presets/`.
+- **`owner/repo:file`** is accepted wherever a LoRA name is (`default_loras`,
+  `performance_presets`, `presets/*.json`, `--lora`) and fetched from the Hugging Face Hub
+  into `loras_dir` on first use (`cz_pipeline.ensure_lora`). A failed download empties the
+  slot with the reason in the log; the preset's steps/guidance still apply.
+- A registry of step-distill LoRAs (`cz_pipeline.STEP_LORAS`, matched on the file-name
+  prefix so the `_comfyui` twin and re-uploads count): with one active, a render at more
+  than 6 steps, with guidance on, or on a Raw base logs a WARNING naming the preset to
+  pick. The render is never blocked.
+- `config-sample.txt`'s `performance_presets` now shows the Krea 2 presets (the Z-Image
+  Lightning / 24 / 40-step leftovers are gone).
+
+Tests in `tests/test_step_lora.py` (no GPU, no network).
+
 ## Unreleased : performance presets and config.txt
 
 - **Extra folder lists on Linux** (2026-11-07, whole family): `loras_extra_dirs` and the
@@ -24,8 +48,10 @@ The app version lives in `cz_core.py` (`APP_VERSION`) and is shown in the browse
   entirely, hiding every preset added since (seen on crispz-moss, 2026-11-07, fixed
   across the family). Now the config's entries come first (they win on a name) and the
   app's missing presets are appended, said in the log at start;
-  `performance_presets_merge: false` keeps the config's list alone. The built-in list in `cz_ui.py` was a stale one (Turbo 8 / Quality 20 / Base CFG
-  28), masked by the sample: it is now the sample's step counts, with a test.
+  `performance_presets_merge: false` keeps the config's list alone.
+- The built-in list in `cz_ui.py` is the sample's Krea 2 list (Turbo 8 steps, Turbo 3 steps
+  with the distill LoRA, Quality 20, Base CFG 28), so a config.txt without
+  `performance_presets` and one with an old list both show the 3-step preset.
 
 ## Unreleased — The LoRA library can live outside the app folder
 
