@@ -169,6 +169,28 @@ def detect_faces(image):
     arr = np.asarray(image.convert("RGB"))[:, :, ::-1].copy()   # RGB -> BGR
     return [tuple(float(v) for v in f.bbox) for f in app.get(arr)]
 
+def detect_faces_full(image):
+    """The faces with the position of the MOUTH and the ArcFace embedding:
+    [{'box': (x1,y1,x2,y2), 'mouth': (x,y) | None, 'embedding': [512 floats] | None}].
+    mouth = the middle of the two mouth corners of the 5 insightface keypoints
+    (kps[3]/kps[4]). Serves the family's cli_faces endpoint (comics2crispz letters with
+    it, crispz-dataset-studio scores the likeness of a card against its reference with
+    the embedding). Copied from crispz-studio on 2026-10-29: the endpoint imported it
+    here without the function existing, so every cli_faces call answered an ImportError."""
+    app = _ensure_face_detector()
+    arr = np.asarray(image.convert("RGB"))[:, :, ::-1].copy()   # RGB -> BGR
+    out = []
+    for f in app.get(arr):
+        mouth = None
+        kps = getattr(f, "kps", None)
+        if kps is not None and len(kps) >= 5:
+            mouth = (float((kps[3][0] + kps[4][0]) / 2.0),
+                     float((kps[3][1] + kps[4][1]) / 2.0))
+        emb = getattr(f, "normed_embedding", None)
+        out.append({"box": tuple(float(v) for v in f.bbox), "mouth": mouth,
+                    "embedding": (emb.tolist() if emb is not None else None)})
+    return out
+
 
 def _resolve_faceswap_model(checkpoints_dir=None):
     """Finds the inswapper model: faceswap_model_path, otherwise a search through the
